@@ -54,8 +54,7 @@ class ContentService:
                 #       Store uploaded files to Azure Blob Storage
 
                 for attachment in attachments:
-                    ext = os.path.splitext(attachment.filename)
-                    file_type = ext.lstrip('.').lower()
+                    file_type = os.path.splitext(attachment.filename)
             except ValidationError as e:
                 logger.error(f"Pydantic validation failed: {e}")
 
