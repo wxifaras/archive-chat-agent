@@ -65,6 +65,7 @@ class AzureAISearchService:
 
         fields = [
             SimpleField(name="document_id", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="text", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="projectId", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="Author", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="Email_Subject", type=SearchFieldDataType.String, filterable=True),
