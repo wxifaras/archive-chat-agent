@@ -9,8 +9,7 @@
                 "host": "localhost",
                 "port": 9091
             },
-            "preLaunchTask": "kill-port-7071",
-            "postDebugTask": "kill-port-7071"
+            "preLaunchTask": "func: host start"
         }
     ]
 }

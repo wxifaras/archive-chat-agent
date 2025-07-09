@@ -1,6 +1,7 @@
 import logging
+import os
 from typing import IO, List
-
+import asyncio
 from pydantic import ValidationError
 import tiktoken
 from services.azure_ai_search_service import AzureAISearchService
@@ -51,7 +52,10 @@ class ContentService:
                 #       Extract text from attachments and chunk them
                 #       Upload to Azure AI Search
                 #       Store uploaded files to Azure Blob Storage
-            
+
+                for attachment in attachments:
+                    ext = os.path.splitext(attachment.filename)
+                    file_type = ext.lstrip('.').lower()
             except ValidationError as e:
                 logger.error(f"Pydantic validation failed: {e}")
 

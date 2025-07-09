@@ -1,7 +1,7 @@
 import uuid
 import azure.functions as func
 import logging
-
+import asyncio
 from pydantic import ValidationError
 from core.settings import settings
 from services.content_service import ContentService
@@ -29,7 +29,7 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 @app.route(route="upload_content", methods=["POST"])
-def upload_content(req: func.HttpRequest) -> func.HttpResponse:
+async def upload_content(req: func.HttpRequest) -> func.HttpResponse:
     logger.info("Processing upload_content request")
 
     try:
@@ -45,7 +45,7 @@ def upload_content(req: func.HttpRequest) -> func.HttpResponse:
         attachments = req.files.getlist("attachment")
         json_str = json_file.stream.read().decode("utf-8")
         
-        content_service.process_content(
+        await content_service.process_content(
             document_id=doc_id,
             json_file_name=json_file.filename,
             json_content=json_str,

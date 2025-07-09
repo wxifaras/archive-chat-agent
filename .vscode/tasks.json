@@ -1,13 +1,6 @@
 {
 	"version": "2.0.0",
 	"tasks": [
-		 {
-			"label": "kill-port-7071",
-			"type": "shell",
-			"command": "lsof -t -i:7071 | xargs -r kill -9",
-			"problemMatcher": [],
-			"presentation": { "echo": true, "reveal": "never", "focus": false }
-    	},
 		{
 			"type": "func",
 			"label": "func: host start",
