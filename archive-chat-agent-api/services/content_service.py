@@ -1,9 +1,10 @@
 import logging
 import os
-from typing import IO, List
+from typing import List
 import asyncio
 from pydantic import ValidationError
 import tiktoken
+from fastapi import UploadFile
 from services.azure_ai_search_service import AzureAISearchService
 from core.settings import settings
 from models.email_item import EmailItem, EmailList
@@ -41,7 +42,7 @@ class ContentService:
             document_id: str,
             json_file_name: str,
             json_content: str,
-            attachments: List[IO]):
+            attachments: List[UploadFile]):
         
             try:
                 email_list = EmailList.model_validate_json(json_content)
@@ -50,6 +51,7 @@ class ContentService:
                 # TODO: Create index
                 #       Chunk json_content
                 #       Extract text from attachments and chunk them
+                #       We need to determine the "source" of each json. For files, we can base it on the extension; for emails which contain information on tweets, we need to possibly use the LLM to determine this in conjunction with provenance.
                 #       Upload to Azure AI Search
                 #       Store uploaded files to Azure Blob Storage
 
@@ -58,9 +60,13 @@ class ContentService:
             except ValidationError as e:
                 logger.error(f"Pydantic validation failed: {e}")
 
-    async def search_content(chat_req: ChatRequest) -> ChatResponse:
+    def search_content(self, chat_req: ChatRequest) -> ChatResponse:
         # Implement search logic here
-        pass
+        # For now, return a simple response
+        return ChatResponse(
+            response="This is a placeholder response. Implement your search logic here.",
+            metadata={"user_id": chat_req.User_Id, "session_id": chat_req.Session_Id}
+        )
 
     @staticmethod
     def chunk_text(allContent):
