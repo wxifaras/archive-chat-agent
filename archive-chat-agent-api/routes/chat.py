@@ -6,7 +6,6 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import ValidationError
 from core.settings import settings
 from services.content_service import ContentService
-from models.chat_request import ChatRequest
 from models.chat_response import ChatResponse
 
 router = APIRouter()
@@ -34,7 +33,7 @@ logger.addHandler(ch)
 async def upload_content(
     document_id: Annotated[str, Form(...)],
     json_file: Annotated[UploadFile, File(...)],
-    attachments: Optional[List[UploadFile]] = File(default=None)
+    attachments: List[UploadFile] = File(default=[])
 ):
     logger.info("Processing upload_content request")
 
@@ -72,18 +71,14 @@ async def chat(
     session_id: Annotated[str, Form(...)],
     message: Annotated[str, Form(...)]
 ):
-    logger.info(f"Processing chat request: {message}")
-
     try:
-        chat_request = ChatRequest(
-            User_Id=user_id,
-            Session_Id=session_id,
-            Message=message
-        )
 
-        logger.info(f"Chat request received: {chat_request.model_dump_json()}")
+        logger.info(f"Received chat request from user_id: {user_id}, session_id: {session_id}")
 
-        chat_response = content_service.search_content(chat_request)
+        if not user_id or not session_id or not message:
+            raise HTTPException(status_code=400, detail="Missing required fields: user_id, session_id, or message")
+
+        chat_response = content_service.search_content(user_id=user_id, session_id=session_id, message=message)
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
         return {"error": str(e)}

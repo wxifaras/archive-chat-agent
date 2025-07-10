@@ -8,7 +8,6 @@ from fastapi import UploadFile
 from services.azure_ai_search_service import AzureAISearchService
 from core.settings import settings
 from models.email_item import EmailItem, EmailList
-from models.chat_request import ChatRequest
 from models.chat_response import ChatResponse
 
 azure_search_service = AzureAISearchService()
@@ -60,12 +59,12 @@ class ContentService:
             except ValidationError as e:
                 logger.error(f"Pydantic validation failed: {e}")
 
-    def search_content(self, chat_req: ChatRequest) -> ChatResponse:
+    def search_content(self, user_id: str, session_id: str, message: str) -> ChatResponse:
         # Implement search logic here
         # For now, return a simple response
         return ChatResponse(
             response="This is a placeholder response. Implement your search logic here.",
-            metadata={"user_id": chat_req.User_Id, "session_id": chat_req.Session_Id}
+            metadata={"user_id": user_id, "session_id": session_id, "message": message}
         )
 
     @staticmethod
