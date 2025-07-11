@@ -4,13 +4,18 @@ from typing import List
 import asyncio
 from pydantic import ValidationError
 import tiktoken
+import json
 from fastapi import UploadFile
 from services.azure_ai_search_service import AzureAISearchService
+from services.azure_doc_intel_service import AzureDocIntelService
+from services.azure_storage_service import AzureStorageService
 from core.settings import settings
 from models.email_item import EmailItem, EmailList
 from models.chat_response import ChatResponse
 
 azure_search_service = AzureAISearchService()
+azure_doc_intell_service =AzureDocIntelService()
+azure_storage_service = AzureStorageService()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(settings.LOG_LEVEL)
@@ -43,19 +48,37 @@ class ContentService:
             json_content: str,
             attachments: List[UploadFile]):
         
-            try:
+            try: 
                 email_list = EmailList.model_validate_json(json_content)
                 email_item = email_list.root[0]
-                # index = azure_search_service.create_index()
-                # TODO: Create index
-                #       Chunk json_content
-                #       Extract text from attachments and chunk them
-                #       We need to determine the "source" of each json. For files, we can base it on the extension; for emails which contain information on tweets, we need to possibly use the LLM to determine this in conjunction with provenance.
-                #       Upload to Azure AI Search
-                #       Store uploaded files to Azure Blob Storage
+                index = azure_search_service.create_index()
 
+                # Chunking and indexing the text field of the json document
+                # Chunking text field by token count
+                blob_path= azure_storage_service.upload_file(str(email_item.projectId),json_content, json_file_name)
+                jsonText = self.chunk_json_text(email_item.text)       
+                azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type=".json")
+
+                # Extract text from attachments using Azure Doc Intell and chunk them by page
+                attachmentChunks = []
                 for attachment in attachments:
+
+                    file_content = attachment.read()
+                    blob_path= azure_storage_service.upload_file(str(email_item.projectId),file_content, attachment.filename)
+                    sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
                     file_type = os.path.splitext(attachment.filename)
+                    allExtractedContent = azure_doc_intell_service.extract_content(sas_url)
+                    attachmentChunks= self.chunk_text(allExtractedContent)
+
+                    azure_search_service.index_content(
+                        attachmentChunks, 
+                        document_id, 
+                        email_item, 
+                        file_name=attachment.filename, 
+                        file_type=file_type[1],
+                        page_number= [chunk['pages'] for chunk in attachmentChunks]
+                    )
+
             except ValidationError as e:
                 logger.error(f"Pydantic validation failed: {e}")
 
@@ -116,4 +139,31 @@ class ContentService:
                 'page_token_map': combined_page_map
             })
 
+        return chunks
+
+    @staticmethod
+    def chunk_json_text(json_text_field):
+        """
+        chunking text field in JSON document
+        chunking is by token count
+        """
+        max_chunk_size = settings.MAX_TOKENS
+        overlap_percentage = float(settings.PAGE_OVERLAP) / 100
+        overlap_size = int(max_chunk_size * overlap_percentage)
+        enc = tiktoken.get_encoding("o200k_base")
+        token_ids = enc.encode(json_text_field)
+        chunks = []
+        i = 0
+        while i < len(token_ids):
+            chunk_tokens = token_ids[i:i + max_chunk_size]
+            chunk_text = enc.decode(chunk_tokens)
+            chunks.append({
+                'chunked_text': chunk_text,
+                'start_token': i,
+                'end_token': i + len(chunk_tokens)
+            })
+            if len(chunk_tokens) < max_chunk_size:
+                # If the chunk is smaller than max_chunk_size, it's the last chunk; return early
+                return chunks
+            i += max_chunk_size - overlap_size
         return chunks
