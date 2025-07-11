@@ -195,7 +195,7 @@ class AzureAISearchService:
                     "level": int(email_item.level) if email_item.level is not None else None,
                     "Comments": str(email_item.Comments) if email_item.Comments is not None else None,
                     "Timestamp": str(email_item.Timestamp) if email_item.Timestamp is not None else None,
-                    "Provenance_Source": None
+                    "Provenance_Source": str(email_item.Provenance_Source) if email_item.Provenance_Source is not None else None,
                 }
                 data = {k: v for k, v in data.items() if v is not None}
                 chunkedContent.append(data)

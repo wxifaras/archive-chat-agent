@@ -27,6 +27,7 @@ class EmailItem(BaseModel):
     POV_Rating: Optional[int] = Field(default=None, alias='POV Rating')
     Comments: Optional[str] = None
     Timestamp: Optional[str] = None
+    Provenance_Source: Optional[str] = None
 
     model_config = {
         'populate_by_name': True,

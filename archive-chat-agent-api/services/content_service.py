@@ -10,10 +10,12 @@ from services.azure_storage_service import AzureStorageService
 from core.settings import settings
 from models.email_item import EmailItem, EmailList
 from models.chat_response import ChatResponse
+from services.azure_openai_service import AzureOpenAIService
 
 azure_search_service = AzureAISearchService()
 azure_doc_intell_service =AzureDocIntelService()
 azure_storage_service = AzureStorageService()
+azure_openai_service = AzureOpenAIService()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(settings.LOG_LEVEL)
@@ -50,7 +52,9 @@ class ContentService:
                 email_list = EmailList.model_validate_json(json_content)
                 email_item = email_list.root[0]
                 index = azure_search_service.create_index()
-
+                provenance_source = azure_openai_service.get_source_from_provenance(email_item.Provenance)
+                email_item.provenance_source = provenance_source
+                
                 # Chunking and indexing the text field of the json document
                 # Chunking text field by token count
                 blob_path= azure_storage_service.upload_file(str(email_item.projectId),json_content, json_file_name)
