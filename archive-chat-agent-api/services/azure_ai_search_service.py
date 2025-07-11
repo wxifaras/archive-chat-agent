@@ -155,7 +155,7 @@ class AzureAISearchService:
                       file_name: Optional[str] = None, 
                       page_number: List[str] = None):
    
-        chunkedContent = []
+        documents = []
         for idx, chunk in enumerate(chunks):
             embedding = self.openai_service.create_embedding(chunk['chunked_text'])
             chunk_id = str(uuid.uuid4())
@@ -198,9 +198,9 @@ class AzureAISearchService:
                     "Provenance_Source": str(email_item.Provenance_Source) if email_item.Provenance_Source is not None else None,
                 }
                 data = {k: v for k, v in data.items() if v is not None}
-                chunkedContent.append(data)
+                documents.append(data)
             else:
-                chunkedContent.append({
+                documents.append({
                     "document_id": document_id,
                     "chunk_id": chunk_id,
                     "projectId": str(email_item.projectId),
@@ -211,7 +211,7 @@ class AzureAISearchService:
                     "page_number": page
                 })
 
-        result = self.search_client.upload_documents(documents=chunkedContent)
+        result = self.search_client.upload_documents(documents=documents)
         uploaded = [str(r.key) for r in result if r.succeeded]
         failed = [str(r.key) for r in result if not r.succeeded]
 
