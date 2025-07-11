@@ -52,9 +52,11 @@ class ContentService:
                 email_list = EmailList.model_validate_json(json_content)
                 email_item = email_list.root[0]
                 index = azure_search_service.create_index()
-                provenance_source = azure_openai_service.get_source_from_provenance(email_item.Provenance)
-                email_item.Provenance_Source = provenance_source
-                
+
+                if len(attachments) == 0:
+                    provenance_source = azure_openai_service.get_source_from_provenance(email_item.Provenance)
+                    email_item.Provenance_Source = provenance_source
+
                 # Chunking and indexing the text field of the json document
                 # Chunking text field by token count
                 blob_path= azure_storage_service.upload_file(str(email_item.projectId),json_content, json_file_name)
@@ -69,6 +71,9 @@ class ContentService:
                     blob_path= azure_storage_service.upload_file(str(email_item.projectId),file_content, attachment.filename)
                     sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
                     file_type = os.path.splitext(attachment.filename)
+                    
+                    email_item.Provenance_Source = file_type
+                    
                     allExtractedContent = azure_doc_intell_service.extract_content(sas_url)
                     attachmentChunks= self.chunk_text(allExtractedContent)
 
