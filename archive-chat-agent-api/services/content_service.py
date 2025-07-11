@@ -65,7 +65,7 @@ class ContentService:
                 attachmentChunks = []
                 for attachment in attachments:
 
-                    file_content = attachment.read()
+                    file_content = await attachment.read()
                     blob_path= azure_storage_service.upload_file(str(email_item.projectId),file_content, attachment.filename)
                     sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
                     file_type = os.path.splitext(attachment.filename)
