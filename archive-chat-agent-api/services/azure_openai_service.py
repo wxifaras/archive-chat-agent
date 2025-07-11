@@ -1,7 +1,6 @@
 from openai import AzureOpenAI
 from core.settings import settings
-import json
-from typing import List, Dict, Generator
+from prompts.core_prompts import PROVENANCE_SOURCE_SYSTEM_PROMPT
 
 class AzureOpenAIService:
     def __init__(self):
@@ -27,10 +26,26 @@ class AzureOpenAIService:
                 text: str
             ):
 
-            response = self.client.embeddings.create(
-                model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
-                input=text
-            )
-            
-            embeddings = response.data[0].embedding
-            return embeddings
+        response = self.client.embeddings.create(
+            model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
+            input=text
+        )
+        
+        embeddings = response.data[0].embedding
+        return embeddings
+
+    def get_source_from_provenance(
+            self, 
+            provenance_text: str
+        ) -> str:
+
+        response = self.client.beta.chat.completions.parse(
+            model=self.deployment_name,
+            messages=[
+                {"role": "system", "content": PROVENANCE_SOURCE_SYSTEM_PROMPT},
+                {"role": "user", "content": provenance_text}
+            ]
+        )
+
+        message_content = response.choices[0].message.parsed
+        return message_content

@@ -1,16 +1,16 @@
 import logging
 import os
-from typing import IO, List
+from typing import List
 import asyncio
 from pydantic import ValidationError
 import tiktoken
 import json
+from fastapi import UploadFile
 from services.azure_ai_search_service import AzureAISearchService
 from services.azure_doc_intel_service import AzureDocIntelService
 from services.azure_storage_service import AzureStorageService
 from core.settings import settings
 from models.email_item import EmailItem, EmailList
-from models.chat_request import ChatRequest
 from models.chat_response import ChatResponse
 
 azure_search_service = AzureAISearchService()
@@ -46,7 +46,7 @@ class ContentService:
             document_id: str,
             json_file_name: str,
             json_content: str,
-            attachments: List[IO]):
+            attachments: List[UploadFile]):
         
             try: 
                 email_list = EmailList.model_validate_json(json_content)
@@ -82,9 +82,13 @@ class ContentService:
             except ValidationError as e:
                 logger.error(f"Pydantic validation failed: {e}")
 
-    async def search_content(chat_req: ChatRequest) -> ChatResponse:
+    def search_content(self, user_id: str, session_id: str, message: str) -> ChatResponse:
         # Implement search logic here
-        pass
+        # For now, return a simple response
+        return ChatResponse(
+            response="This is a placeholder response. Implement your search logic here.",
+            metadata={"user_id": user_id, "session_id": session_id, "message": message}
+        )
 
     @staticmethod
     def chunk_text(allContent):
