@@ -1,10 +1,8 @@
 import logging
 import os
 from typing import List
-import asyncio
 from pydantic import ValidationError
 import tiktoken
-import json
 from fastapi import UploadFile
 from services.azure_ai_search_service import AzureAISearchService
 from services.azure_doc_intel_service import AzureDocIntelService
@@ -79,7 +77,7 @@ class ContentService:
                         page_number= [chunk['pages'] for chunk in attachmentChunks]
                     )
 
-            except ValidationError as e:
+            except Exception as e:
                 logger.error(f"Pydantic validation failed: {e}")
 
     def search_content(self, user_id: str, session_id: str, message: str) -> ChatResponse:

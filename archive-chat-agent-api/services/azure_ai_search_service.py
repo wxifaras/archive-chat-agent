@@ -97,6 +97,7 @@ class AzureAISearchService:
             SimpleField(name="POV_Rating", type=SearchFieldDataType.Int32, filterable=True),
             SimpleField(name="Comments", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="Timestamp", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="Provenance_Source", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="chunk_id", type=SearchFieldDataType.String, filterable=True, key=True),
             SimpleField(name="file_name", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="file_type", type=SearchFieldDataType.String, filterable=True),
@@ -146,7 +147,13 @@ class AzureAISearchService:
         logger.info(f"Created index: {result.name}")
         return result.name
 
-    def index_content(self, chunks: list[str], document_id: str, email_item: EmailItem, file_type: str, file_name: Optional[str] = None, page_number: List[str] = None):
+    def index_content(self, 
+                      chunks: list[str], 
+                      document_id: str, 
+                      email_item: EmailItem, 
+                      file_type: str, 
+                      file_name: Optional[str] = None, 
+                      page_number: List[str] = None):
    
         chunkedContent = []
         for idx, chunk in enumerate(chunks):
@@ -188,6 +195,7 @@ class AzureAISearchService:
                     "level": int(email_item.level) if email_item.level is not None else None,
                     "Comments": str(email_item.Comments) if email_item.Comments is not None else None,
                     "Timestamp": str(email_item.Timestamp) if email_item.Timestamp is not None else None,
+                    "Provenance_Source": None
                 }
                 data = {k: v for k, v in data.items() if v is not None}
                 chunkedContent.append(data)
