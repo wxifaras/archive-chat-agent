@@ -39,7 +39,7 @@ class AzureOpenAIService:
             provenance_text: str
         ) -> str:
 
-        response = self.client.beta.chat.completions.parse(
+        response = self.client.beta.chat.completions.create(
             model=self.deployment_name,
             messages=[
                 {"role": "system", "content": PROVENANCE_SOURCE_SYSTEM_PROMPT},
@@ -47,5 +47,5 @@ class AzureOpenAIService:
             ]
         )
 
-        message_content = response.choices[0].message.parsed
+        message_content = response.choices[0].message.content
         return message_content

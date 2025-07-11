@@ -53,7 +53,7 @@ class ContentService:
                 email_item = email_list.root[0]
                 index = azure_search_service.create_index()
                 provenance_source = azure_openai_service.get_source_from_provenance(email_item.Provenance)
-                email_item.provenance_source = provenance_source
+                email_item.Provenance_Source = provenance_source
                 
                 # Chunking and indexing the text field of the json document
                 # Chunking text field by token count
