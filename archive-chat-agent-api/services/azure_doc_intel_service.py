@@ -15,7 +15,7 @@ class AzureDocIntelService:
             endpoint=settings.AZURE_DOCUMENTINTELLIGENCE_ENDPOINT, credential=AzureKeyCredential(settings.AZURE_DOCUMENTINTELLIGENCE_API_KEY)
         )
 
-    def extract_text_from_url(self, url: str):
+    def extract_content(self, url: str):
         poller = self.document_intelligence_client.begin_analyze_document(
             "prebuilt-layout", AnalyzeDocumentRequest(url_source=url)
         )

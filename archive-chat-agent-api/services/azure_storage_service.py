@@ -25,12 +25,12 @@ class AzureStorageService:
     def __init__(self):
         if not all([
             settings.AZURE_STORAGE_CONNECTION_STRING,
-            settings.AZURE_STORAGE_RFP_CONTAINER_NAME
+            settings.AZURE_STORAGE_ARCHIVE_CONTAINER_NAME
         ]):
             raise ValueError("Required Azure Storage settings are missing")
         
         self.blob_service_client = BlobServiceClient.from_connection_string(settings.AZURE_STORAGE_CONNECTION_STRING)
-        self.container_client = self.blob_service_client.get_container_client(settings.AZURE_STORAGE_RFP_CONTAINER_NAME)
+        self.container_client = self.blob_service_client.get_container_client(settings.AZURE_STORAGE_ARCHIVE_CONTAINER_NAME)
 
     def generate_blob_sas_url(self, blob_name: str) -> str:
         start_time = datetime.datetime.now(datetime.timezone.utc)
@@ -67,3 +67,24 @@ class AzureStorageService:
         except ResourceNotFoundError:
             logger.error(f"{blob_path}' not found.")
             return ""
+        
+    def upload_file(
+        self,
+        folder_name: str,
+        content: bytes | str,
+        blob_name: str,
+    ) -> str:
+        
+        # Normalize the blob path
+        blob_path = f"{folder_name.rstrip('/')}/{blob_name.lstrip('/')}"
+
+        # Ensure content is bytes
+        if isinstance(content, str):
+            file_bytes = content.encode('utf-8')
+        else:
+            file_bytes = content
+
+        # Get a client and upload
+        blob_client = self.container_client.get_blob_client(blob_path)
+        blob_client.upload_blob(file_bytes, overwrite=True)
+        return blob_path

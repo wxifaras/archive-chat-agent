@@ -22,15 +22,15 @@ class AzureOpenAIService:
 
         self.deployment_name = settings.AZURE_OPENAI_DEPLOYMENT_NAME
 
-def create_embedding(
-            self, 
-            text: str
-        ):
+    def create_embedding(
+                self, 
+                text: str
+            ):
 
-        response = self.client.embeddings.create(
-            model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
-            input=text
-        )
-        
-        embeddings = response.data[0].embedding
-        return embeddings
+            response = self.client.embeddings.create(
+                model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
+                input=text
+            )
+            
+            embeddings = response.data[0].embedding
+            return embeddings
