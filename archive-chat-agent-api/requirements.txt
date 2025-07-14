@@ -3,6 +3,7 @@ pydantic
 pydantic-settings
 python-multipart
 azure-storage-blob
+azure-storage-blob[aio]
 azure-ai-documentintelligence
 openai
 tiktoken

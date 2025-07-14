@@ -1,4 +1,5 @@
-from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
+from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+from azure.storage.blob.aio import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
 from core.settings import settings
 import datetime
@@ -58,17 +59,17 @@ class AzureStorageService:
                 return part.split("=", 1)[1]
         raise ValueError("AccountKey not found in connection string.")
     
-    def get_blob(self, blob_path: str) -> str:
+    async def get_blob(self, blob_path: str) -> str:
         blob_client = self.container_client.get_blob_client(blob_path)
 
         try:
-            data = blob_client.download_blob().readall()
+            data = await(await blob_client.download_blob()).readall()
             return data.decode("utf-8")
         except ResourceNotFoundError:
             logger.error(f"{blob_path}' not found.")
             return ""
-        
-    def upload_file_with_dup_check(
+
+    async def upload_file_with_dup_check(
         self,
         folder_name: str,
         content: bytes | str,
@@ -88,9 +89,9 @@ class AzureStorageService:
         blob_client = self.container_client.get_blob_client(blob_path)
 
         #Check if the blob already exists
-        if blob_client.exists():
+        if await blob_client.exists():
             logger.info(f"Blob '{blob_path}' already exists; Skipping upload.")
             return blob_path, False
 
-        blob_client.upload_blob(file_bytes, overwrite=False)
+        await blob_client.upload_blob(file_bytes, overwrite=False)
         return blob_path, True
