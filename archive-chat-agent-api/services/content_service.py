@@ -60,7 +60,7 @@ class ContentService:
 
                 # Chunking and indexing the text field of the json document
                 # Chunking text field by token count
-                blob_path, uploaded = azure_storage_service.upload_file_with_dup_check(
+                blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
                     str(email_item.projectId),
                     json_content,
                     json_file_name
@@ -78,7 +78,7 @@ class ContentService:
                 attachmentChunks = []
                 for attachment in attachments:
                     file_content = await attachment.read()
-                    blob_path, uploaded = azure_storage_service.upload_file_with_dup_check(
+                    blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
                         str(email_item.projectId),
                         file_content,
                         attachment.filename
