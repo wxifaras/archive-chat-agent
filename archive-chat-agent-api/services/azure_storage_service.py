@@ -68,13 +68,13 @@ class AzureStorageService:
             logger.error(f"{blob_path}' not found.")
             return ""
         
-    def upload_file(
+    def upload_file_with_dup_check(
         self,
         folder_name: str,
         content: bytes | str,
         blob_name: str,
-    ) -> str:
-        
+    ) -> tuple[str, bool]:
+
         # Normalize the blob path
         blob_path = f"{folder_name.rstrip('/')}/{blob_name.lstrip('/')}"
 
@@ -86,5 +86,11 @@ class AzureStorageService:
 
         # Get a client and upload
         blob_client = self.container_client.get_blob_client(blob_path)
-        blob_client.upload_blob(file_bytes, overwrite=True)
-        return blob_path
+
+        #Check if the blob already exists
+        if blob_client.exists():
+            logger.info(f"Blob '{blob_path}' already exists; Skipping upload.")
+            return blob_path, False
+
+        blob_client.upload_blob(file_bytes, overwrite=False)
+        return blob_path, True

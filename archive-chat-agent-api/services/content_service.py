@@ -3,6 +3,7 @@ import os
 from typing import List
 from pydantic import ValidationError
 import tiktoken
+import time
 from fastapi import UploadFile
 from services.azure_ai_search_service import AzureAISearchService
 from services.azure_doc_intel_service import AzureDocIntelService
@@ -59,19 +60,37 @@ class ContentService:
 
                 # Chunking and indexing the text field of the json document
                 # Chunking text field by token count
-                blob_path= azure_storage_service.upload_file(str(email_item.projectId),json_content, json_file_name)
-                if len(email_item.text)==0:
-                    email_item.text = "No text content."
-                
-                jsonText = self.chunk_json_text(email_item.text)       
-                azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type=".json")
+                blob_path, uploaded = azure_storage_service.upload_file_with_dup_check(
+                    str(email_item.projectId),
+                    json_content,
+                    json_file_name
+                )
+
+                if not uploaded:
+                    logger.warning(f"File {json_file_name} already exists in Azure Storage. Skipping JSON upload.")
+                else:   
+                    if len(email_item.text)==0:
+                        email_item.text = "No text content."
+                    jsonText = self.chunk_json_text(email_item.text)       
+                    azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type=".json")
 
                 # Extract text from attachments using Azure Doc Intell and chunk them by page
                 attachmentChunks = []
                 for attachment in attachments:
                     file_content = await attachment.read()
-                    blob_path= azure_storage_service.upload_file(str(email_item.projectId),file_content, attachment.filename)
+                    blob_path, uploaded = azure_storage_service.upload_file_with_dup_check(
+                        str(email_item.projectId),
+                        file_content,
+                        attachment.filename
+                    )
+                    
+                    if not uploaded:
+                        logger.warning(f"File {attachment.filename} already exists in Azure Storage. Skipping Attachment upload.")
+                        continue
+
                     sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
+                    time.sleep(5)
+
                     root, ext = os.path.splitext(attachment.filename)
                     
                     email_item.Provenance_Source = ext
