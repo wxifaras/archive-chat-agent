@@ -119,7 +119,7 @@ class ContentService:
                     )
 
             except Exception as e:
-                logger.error(f"Pydantic validation failed: {e}")
+                logger.error(f"Error processing content: {str(e)}")
 
     def encode_sas_url(self, sas_url: str) -> str:
         # URL encode the blob name part if it contains special characters

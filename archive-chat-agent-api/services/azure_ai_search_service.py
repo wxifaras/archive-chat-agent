@@ -225,10 +225,10 @@ class AzureAISearchService:
         failed = [str(r.key) for r in result if not r.succeeded]
 
         if failed:
-            logger.error(f"Failed to upload chunks: {failed}")
+            logger.error(f"Failed to upload chunks: {failed} for File {file_name}.")
         else:
-            logger.info(f"Successfully uploaded {len(uploaded)} chunks.")
-        
+            logger.info(f"Successfully uploaded {len(uploaded)} chunks for File {file_name}.")
+
         return uploaded
     
     async def run_search(
