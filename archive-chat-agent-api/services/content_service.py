@@ -182,24 +182,22 @@ class ContentService:
     
     async def execute_conversation_workflow(self, conversation: ContentConversation) -> ConversationResult:
         """Executes the agentic rag workflow"""
-        azure_openai = AzureOpenAIService()
-        azure_search = AzureAISearchService()
         
         # continue if we have not exceeded max attempts and conversation is not finalized
         while conversation.should_continue():
             # Generate and execute search
-            search_query, search_filter = await self.generate_search_query(conversation, azure_openai)
-            search_results = await self.execute_search(search_query, search_filter, conversation, azure_search)
+            search_query, search_filter = await self.generate_search_query(conversation)
+            search_results = await self.execute_search(search_query, search_filter, conversation)
             
             # Review results
-            await self.review_search_results(conversation, search_results, azure_openai)
+            await self.review_search_results(conversation, search_results)
 
         # Generate final answer by synthesizing vetted results
-        final_answer = await self.generate_final_answer(conversation, azure_openai)
+        final_answer = await self.generate_final_answer(conversation)
 
         return conversation.to_result(final_answer)
 
-    async def generate_search_query(self, conversation: ContentConversation, azure_openai: AzureOpenAIService) -> tuple[str, str]:
+    async def generate_search_query(self, conversation: ContentConversation) -> tuple[str, str]:
         """Generate search query and filter using the LLM based on the conversation history"""
 
         logger.info(f"Generating search query for attempt {conversation.attempts + 1}")
@@ -224,7 +222,7 @@ class ContentService:
         ]
         
         try:
-            response = azure_openai.get_chat_response(messages, SearchPromptResponse)
+            response = azure_openai_service.get_chat_response(messages, SearchPromptResponse)
             conversation.add_search_attempt(response.search_query)
             return response.search_query, response.filter
         except Exception as e:
@@ -232,10 +230,10 @@ class ContentService:
             # Fallback to user query with no filter
             return conversation.user_query, ""
     
-    async def execute_search(self, query: str, filter_str: str, conversation: ContentConversation, azure_search: AzureAISearchService) -> List[SearchResult]:
+    async def execute_search(self, query: str, filter_str: str, conversation: ContentConversation) -> List[SearchResult]:
         """Execute search with proper error handling"""
         try:
-            results = azure_search.run_search(
+            results = azure_search_service.run_search(
                 search_query=query,
                 processed_ids=conversation.processed_ids,
                 provenance_filter=filter_str if filter_str else None
@@ -263,7 +261,7 @@ class ContentService:
             logger.error(f"Search execution failed for query '{query}': {str(e)}")
             return []  # Return empty results to continue workflow
 
-    async def review_search_results(self, conversation: ContentConversation, search_results: List[SearchResult], azure_openai: AzureOpenAIService):
+    async def review_search_results(self, conversation: ContentConversation, search_results: List[SearchResult]):
         """
         Review search results and determine which are valid/invalid for answering the user's question.
         Uses Azure OpenAI to analyze relevance and make decisions about continuing or finalizing.
@@ -306,7 +304,7 @@ class ContentService:
             ]
 
             # Get review decision from Azure OpenAI
-            review_decision = azure_openai.get_chat_response(messages, ReviewDecision)
+            review_decision = azure_openai_service.get_chat_response(messages, ReviewDecision)
 
             conversation.thought_process.append({
                 "step": "review",
@@ -401,7 +399,7 @@ class ContentService:
         
         return "\n".join(history_parts)
 
-    async def generate_final_answer(self, conversation: ContentConversation, azure_openai: AzureOpenAIService) -> str:
+    async def generate_final_answer(self, conversation: ContentConversation) -> str:
         """Generate final answer using Azure OpenAI with proper error handling"""
         
         logger.info(f"Generating final answer.")
@@ -446,7 +444,7 @@ class ContentService:
                 {"role": "user", "content": llm_input}
             ]
             
-            final_answer = azure_openai.get_chat_response_text(messages)
+            final_answer = azure_openai_service.get_chat_response_text(messages)
             
             conversation.thought_process.append({
                 "step": "response",
