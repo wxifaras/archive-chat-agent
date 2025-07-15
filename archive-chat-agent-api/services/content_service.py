@@ -52,10 +52,10 @@ class ContentService:
             try: 
                 email_list = EmailList.model_validate_json(json_content)
                 email_item = email_list.root[0]
-                index = azure_search_service.create_index()
+                index = await azure_search_service.create_index()
 
                 if len(attachments) == 0:
-                    provenance_source = azure_openai_service.get_source_from_provenance(email_item.Provenance)
+                    provenance_source = await azure_openai_service.get_source_from_provenance(email_item.Provenance)
                     email_item.Provenance_Source = provenance_source
 
                 # Chunking and indexing the text field of the json document
@@ -73,7 +73,7 @@ class ContentService:
                         email_item.text = "No text content."
 
                     jsonText = self.chunk_json_text(email_item.text)       
-                    azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type="json")
+                    await azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type="json")
 
                 # Extract text from attachments using Azure Doc Intell and chunk them by page
                 attachmentChunks = []
@@ -95,10 +95,10 @@ class ContentService:
                     root, ext = os.path.splitext(attachment.filename)
                     
                     email_item.Provenance_Source = ext[1:]
-                    allExtractedContent = azure_doc_intell_service.extract_content(sas_url)
+                    allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
                     attachmentChunks= self.chunk_text(allExtractedContent)
 
-                    azure_search_service.index_content(
+                    await azure_search_service.index_content(
                         attachmentChunks, 
                         document_id, 
                         email_item, 

@@ -1,10 +1,10 @@
 import uuid
+from azure.search.documents.indexes.aio import SearchIndexClient
+from azure.search.documents.aio import SearchClient
 from azure.search.documents.indexes.models import SearchIndex, SearchField, VectorSearch, VectorSearchProfile, HnswAlgorithmConfiguration, SemanticSearch, SemanticConfiguration, SemanticPrioritizedFields, SemanticField, AzureOpenAIVectorizer, AzureOpenAIVectorizerParameters
 from models.email_item import EmailItem
 from services.azure_openai_service import AzureOpenAIService
-from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential 
-from azure.search.documents import SearchClient
 from azure.search.documents.models import VectorizedQuery
 from azure.search.documents.indexes.models import (
     SimpleField,
@@ -58,9 +58,9 @@ class AzureAISearchService:
         self.search_client = SearchClient(settings.AZURE_AI_SEARCH_SERVICE_ENDPOINT, settings.AZURE_AI_SEARCH_INDEX_NAME, AzureKeyCredential(settings.AZURE_AI_SEARCH_SERVICE_KEY))
         self.openai_service = AzureOpenAIService()
 
-    def create_index(self) -> str:
+    async def create_index(self) -> str:
         try:
-            self.search_index_client.get_index(settings.AZURE_AI_SEARCH_INDEX_NAME)
+            await self.search_index_client.get_index(settings.AZURE_AI_SEARCH_INDEX_NAME)
             logger.info(f"{settings.AZURE_AI_SEARCH_INDEX_NAME} index already exists")
             return settings.AZURE_AI_SEARCH_INDEX_NAME
         except:
@@ -143,11 +143,11 @@ class AzureAISearchService:
             semantic_search=SemanticSearch(configurations=[semantic_config])
         )
 
-        result = self.search_index_client.create_or_update_index(idx)
+        result = await self.search_index_client.create_or_update_index(idx)
         logger.info(f"Created index: {result.name}")
         return result.name
 
-    def index_content(self, 
+    async def index_content(self, 
                       chunks: list[str], 
                       document_id: str, 
                       email_item: EmailItem, 
@@ -157,13 +157,13 @@ class AzureAISearchService:
    
         documents = []
         for idx, chunk in enumerate(chunks):
-            embedding = self.openai_service.create_embedding(chunk['chunked_text'])
+            embedding = await self.openai_service.create_embedding(chunk['chunked_text'])
             chunk_id = str(uuid.uuid4())
             if page_number is None:
                 page_number = []
             page = page_number[idx] if idx < len(page_number) else []
 
-            if file_type == ".json":
+            if file_type == "json":
                 data={
                     "document_id": document_id,
                     "chunk_id": chunk_id,
@@ -212,7 +212,7 @@ class AzureAISearchService:
                     "Provenance_Source": str(email_item.Provenance_Source) if email_item.Provenance_Source is not None else None
                 })
 
-        result = self.search_client.upload_documents(documents=documents)
+        result = await self.search_client.upload_documents(documents=documents)
         uploaded = [str(r.key) for r in result if r.succeeded]
         failed = [str(r.key) for r in result if not r.succeeded]
 

@@ -1,4 +1,4 @@
-from openai import AzureOpenAI
+from openai import AsyncAzureOpenAI
 from core.settings import settings
 from prompts.core_prompts import PROVENANCE_SOURCE_SYSTEM_PROMPT
 
@@ -13,7 +13,7 @@ class AzureOpenAIService:
         ]):
             raise ValueError("Required Azure OpenAI settings are missing")
 
-        self.client = AzureOpenAI(
+        self.client = AsyncAzureOpenAI(
             azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
             api_key=settings.AZURE_OPENAI_API_KEY,
             api_version=settings.AZURE_OPENAI_API_VERSION,
@@ -21,12 +21,12 @@ class AzureOpenAIService:
 
         self.deployment_name = settings.AZURE_OPENAI_DEPLOYMENT_NAME
 
-    def create_embedding(
-                self, 
-                text: str
-            ):
+    async def create_embedding(
+            self,
+            text: str
+        ):
 
-        response = self.client.embeddings.create(
+        response = await self.client.embeddings.create(
             model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
             input=text
         )
@@ -34,12 +34,12 @@ class AzureOpenAIService:
         embeddings = response.data[0].embedding
         return embeddings
 
-    def get_source_from_provenance(
-            self, 
+    async def get_source_from_provenance(
+            self,
             provenance_text: str
         ) -> str:
 
-        response = self.client.beta.chat.completions.create(
+        response = await self.client.beta.chat.completions.create(
             model=self.deployment_name,
             messages=[
                 {"role": "system", "content": PROVENANCE_SOURCE_SYSTEM_PROMPT},
