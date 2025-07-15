@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 class SearchPromptResponse(BaseModel):
     search_query: str
-    #filter: str | None
+    filter: str
 
 @dataclass
 class ContentConversation:
@@ -65,7 +65,7 @@ class ConversationResult:
 NUM_SEARCH_RESULTS = 5
 
 # Create a type for indices from 0 to NUM_SEARCH_RESULTS-1
-SearchResultIndex = Literal[tuple(range(NUM_SEARCH_RESULTS))]
+SearchResultIndex = Literal[0, 1, 2, 3, 4]
 
 class ReviewDecision(BaseModel):
     """Schema for review agent decisions"""

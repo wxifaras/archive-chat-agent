@@ -64,4 +64,18 @@ class AzureOpenAIService:
         )
 
         message_content = response.choices[0].message.parsed
+
+        return message_content
+    
+    def get_chat_response_text(self, messages: List[Dict[str, str]]) -> str:
+        """
+        Gets a simple text response from Azure OpenAI (non-streaming, no structured output)
+        """
+        response = self.client.chat.completions.create(
+            model=self.deployment_name,
+            messages=messages
+        )
+        
+        message_content = response.choices[0].message.content
+        
         return message_content

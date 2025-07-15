@@ -51,7 +51,7 @@ class SearchResult(TypedDict):
     content: str
     source_file: str
     source_pages: int
-    score: float
+    reranker_score: float
 
 class AzureAISearchService:
     def __init__(self): 
@@ -234,8 +234,8 @@ class AzureAISearchService:
     def run_search(
             self,
             search_query: str,
-            processed_ids: Set[str]
-            #category_filter: str | None = None,
+            processed_ids: Set[str],
+            provenance_filter: str | None = None,
         ) -> List[SearchResult]:
         """
         Perform a search using Azure Cognitive Search with both semantic and vector queries.
@@ -250,9 +250,11 @@ class AzureAISearchService:
         if processed_ids:
             ids_string = ','.join(processed_ids)
             filter_parts.append(f"not search.in(chunk_id, '{ids_string}')")
-        # TODO: We will need a provenance filter based on the query (this will be Provenance_Source)
-        #if provenance_filter:
-        #    filter_parts.append(f"({category_filter})")
+        
+        # Add provenance filter if provided
+        if provenance_filter:
+            filter_parts.append(f"({provenance_filter})")
+        
         filter_str = " and ".join(filter_parts) if filter_parts else None
 
         results = self.search_client.search(
@@ -260,14 +262,16 @@ class AzureAISearchService:
             vector_queries=[vector_query],
             filter=filter_str,
             select=["chunk_id", "chunk_content", "file_name"],
-            top=NUM_SEARCH_RESULTS
+            top=NUM_SEARCH_RESULTS,
+            query_type="semantic",
+            semantic_configuration_name="semantic-config"
         )
         search_results = []
         for result in results:
             search_result: SearchResult = {
                 "chunk_id": result["chunk_id"],
                 "chunk_content": result["chunk_content"],
-                "score": result["@search.score"]
+                "reranker_score": result["@search.reranker_score"],
             }
             search_results.append(search_result)
         return search_results

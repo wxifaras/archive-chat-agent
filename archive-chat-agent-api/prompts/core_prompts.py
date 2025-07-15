@@ -34,7 +34,7 @@ PROVENANCE_SOURCE_SYSTEM_PROMPT = """
 """
 
 SEARCH_PROMPT = """
-    Generate "search text" based on the user's question and what we've learned from previous searches (if any). Your search text should be a paragraph of what you think you will find in the content documents themselves. Take your best
+    Generate "search_query" and "filter" based on the user's question and what we've learned from previous searches (if any). Your search_query should be a paragraph of what you think you will find in the content documents themselves. Take your best
     guess as to what the user is searching for will look/sound like. We are using a process called Hypothetical Document Embedding (HyDe) to retrieve the most relevant documents for the users input. HyDe takes advantage of vector
     embeddings by making sure our search text is similar to the target document chunk in the vector space.
 
@@ -44,84 +44,74 @@ SEARCH_PROMPT = """
     
     Your task:
     1. Based on the previous reviews, understand what information we still need
-    2. Consider the question and determine if the question is about a source document based on the source document guidance
+    2. Analyze the question to determine if it's asking for a specific document type
     3. Generate a hypothetical paragraph or few sentences of what we are looking for in the documents
+    4. Generate an appropriate OData filter if the question is asking for a specific document type
 
     ###Output Format###
 
     search_query: The generated search text
+    filter: The OData filter (empty string if no filter needed)
 
     IMPORTANT - generate the hypothetical search text as instructed. DO NOT GENERATE A STANDARD KEYWORD-BASED SEARCH QUERY.
 
-    ###Source Document Guidance###
+    ###Search Categories###
 
-    {
-        "SourceDocument": "",
-        "Description": "General questions not related to a specific document type",
-        "SampleQuestions": [
-            "What was the change in the Consumer Health Index (CHI) over the last four weeks as of August 2022",
-            "What change did the middle-income outlook score experience in March 2025?",
-            "Between 2016 and 2021, what share of new household growth in midsize metros occurred in the suburbs"
-        ]
-    },
-    {
-        "SourceDocument": "",
-        "Description": "This category includes questions about the provenance of documents and should use the "Provenance" field which is a string that contains the provenance of the document",
-        "SampleQuestions": [
-            "According to the provenance entry, who submitted the presentation and when was it received?",
-            "Who produced the "US Consumer Health Indexes March 2022" presentation?"
-        ]
-    },
-    {
-        "SourceDocument": "Tweet",
-        "Description": "This category includes questions about specific documents, which include Tweet, Email, Web, Docx, PDF, and PPT",
-        "SampleQuestions": [
-            "Find me the tweet that mentions the Consumer Health Index (CHI) change in August 2022",
-        ]
-    },
-    {
-        "SourceDocument": "PPT",
-        "Description": "This category includes questions about specific documents, which include Tweet, Email, Web, Docx, PDF, and PPT",
-        "SampleQuestions": [
-            "Find me the PowerPoint presentation that discusses the Consumer Health Index (CHI) change in August 2022"
-        ]
-    },
-    {
-        "SourceDocument": "DOCX",
-        "Description": "This category includes questions about specific documents, which include Tweet, Email, Web, Docx, PDF, and PPT",
-        "SampleQuestions": [
-            "Find me the word document that discusses the Consumer Health Index (CHI) change in August 2022"
-        ]
-    },
-    {
-        "SourceDocument": "PDF",
-        "Description": "This category includes questions about specific documents, which include Tweet, Email, Web, Docx, PDF, and PPT",
-        "SampleQuestions": [
-            "Find me the PDF that discusses the Consumer Health Index (CHI) change in August 2022"
-        ]
-    }
-    
+    **1. General Search (no filter needed)**
+    - Questions about content/topics without specifying document type
+    - Use empty filter: ""
+    - Examples: "What was the change in the Consumer Health Index?", "Tell me about retail sales"
+
+    **2. Provenance Search (no filter needed)**
+    - Questions about document provenance/metadata
+    - Search the "Provenance" field for information about document origin
+    - Use empty filter: ""
+    - Examples: "Who submitted this presentation?", "When was this document received?"
+
+    **3. Document Type Search (filter required)**
+    - Questions asking for specific document types
+    - Use OData filter: "Provenance_Source eq 'TYPE'"
+    - Document types and their Provenance_Source values:
+      * Tweet → "Tweet"
+      * Email → "Email" 
+      * Web page/article → "Web"
+      * PowerPoint/Presentation → "ppt"
+      * PDF → "pdf"
+      * Word document → "docx"
+      * Excel → "xlsx"
+    - Examples: "Find me the tweet about...", "Show me the PowerPoint on...", "Get the PDF that discusses..."
+
     ###Examples###
     
     User Question: "What was the change in the Consumer Health Index (CHI) over the last four weeks as of August 2022?"
     Assistant: 
-    search_query: "consumer health index CHI change last four weeks from August 2022"
+    search_query: "Consumer Health Index CHI experienced a change over the last four weeks in August 2022. The index showed movement and variation during this period."
     filter: ""
 
     User Question: "According to the provenance entry, who submitted the presentation and when was it received?"
     Assistant: 
-    search_query: "provenance submitted presentation received date August 2022"
-    fitler: ""
+    search_query: "The provenance entry contains information about who submitted the presentation and the date it was received. The document metadata shows submission details and receipt timestamp."
+    filter: ""
     
     User Question: "Find me the tweet that mentions the Consumer Health Index (CHI) change in August 2022"
     Assistant: 
-    search_query: "consumer health index CHI change last four weeks from August 2022"
+    search_query: "Consumer Health Index CHI experienced a change in August 2022. The social media post discusses the index movement and trends during this time period."
     filter: "Provenance_Source eq 'Tweet'"
     
     User Question: "Find me the PowerPoint presentation that discusses the Consumer Health Index (CHI) change in August 2022"
     Assistant:
-    search_query: "consumer health index CHI change last four weeks from August 2022"
-    filter: "Provenance_Source eq 'PPT'"
+    search_query: "Consumer Health Index CHI experienced a change in August 2022. The presentation contains slides and analysis about the index movement and trends during this period."
+    filter: "Provenance_Source eq 'ppt'"
+
+    User Question: "Find me a tweet about retail sales"
+    Assistant:
+    search_query: "Retail sales performance, trends, and data are discussed in this social media post. The content covers retail industry metrics and sales figures."
+    filter: "Provenance_Source eq 'Tweet'"
+
+    User Question: "Show me the PDF about consumer behavior"
+    Assistant:
+    search_query: "Consumer behavior patterns, trends, and analysis are covered in this document. The content discusses how consumers make purchasing decisions and market behavior."
+    filter: "Provenance_Source eq 'pdf'"
 
     """
 

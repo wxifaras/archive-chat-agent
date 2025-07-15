@@ -82,6 +82,7 @@ class ContentService:
                 attachmentChunks = []
                 for attachment in attachments:
                     file_content = await attachment.read()
+                    
                     blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
                         str(email_item.projectId),
                         file_content,
@@ -93,8 +94,13 @@ class ContentService:
                         continue
 
                     sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
+
+                    # Encode the SAS URL to handle special characters                    
+                    sas_url = self.encode_sas_url(sas_url)
+                    
                     time.sleep(5)
 
+                    # Use original filename for file extension and indexing
                     root, ext = os.path.splitext(attachment.filename)
                     
                     email_item.Provenance_Source = ext[1:]
@@ -105,13 +111,42 @@ class ContentService:
                         attachmentChunks, 
                         document_id, 
                         email_item, 
-                        file_name=attachment.filename, 
+                        file_name=attachment.filename,  # Use original filename for indexing
                         file_type=ext[1:],
                         page_number= [chunk['pages'] for chunk in attachmentChunks]
                     )
 
             except Exception as e:
                 logger.error(f"Pydantic validation failed: {e}")
+
+    def encode_sas_url(self, sas_url: str) -> str:
+        # URL encode the blob name part if it contains special characters
+        from urllib.parse import quote
+        import re
+        
+        # Get the set of unsafe characters
+        unsafe_chars = re.compile(r'[^A-Za-z0-9\-_.()]')
+        
+        if unsafe_chars.search(sas_url):
+            # Split the URL to isolate the blob name from the query parameters
+            if '?' in sas_url:
+                base_url, query_params = sas_url.split('?', 1)
+            else:
+                base_url, query_params = sas_url, ''
+            
+            # Extract blob name from the URL path (last part after the last /)
+            url_parts = base_url.split('/')
+            if len(url_parts) > 0:
+                blob_name = url_parts[-1]
+                # URL encode the blob name with safe characters for Azure blob names
+                encoded_blob_name = quote(blob_name, safe='')
+                url_parts[-1] = encoded_blob_name
+                base_url = '/'.join(url_parts)
+            
+            # Reconstruct the URL
+            sas_url = f"{base_url}?{query_params}" if query_params else base_url
+        
+        return sas_url
 
     async def chat_with_content(self, message: str, user_id: str, session_id: str):
         """
@@ -129,7 +164,7 @@ class ContentService:
 
             return {
                 "answer": result.final_answer,
-                "citations": result.citation,
+                "citations": result.citations,
                 "thought_process": result.thought_process,
                 "attempts": result.attempts,
                 "search_queries": result.search_queries
@@ -153,8 +188,8 @@ class ContentService:
         # continue if we have not exceeded max attempts and conversation is not finalized
         while conversation.should_continue():
             # Generate and execute search
-            search_query = await self.generate_search_query(conversation, azure_openai)
-            search_results = await self.execute_search(search_query, conversation, azure_search)
+            search_query, search_filter = await self.generate_search_query(conversation, azure_openai)
+            search_results = await self.execute_search(search_query, search_filter, conversation, azure_search)
             
             # Review results
             await self.review_search_results(conversation, search_results, azure_openai)
@@ -164,8 +199,8 @@ class ContentService:
 
         return conversation.to_result(final_answer)
 
-    async def generate_search_query(self, conversation: ContentConversation, azure_openai: AzureOpenAIService) -> str:
-        """Generate search query using the LLM based on the conversation history"""
+    async def generate_search_query(self, conversation: ContentConversation, azure_openai: AzureOpenAIService) -> tuple[str, str]:
+        """Generate search query and filter using the LLM based on the conversation history"""
 
         logger.info(f"Generating search query for attempt {conversation.attempts + 1}")
 
@@ -191,18 +226,19 @@ class ContentService:
         try:
             response = azure_openai.get_chat_response(messages, SearchPromptResponse)
             conversation.add_search_attempt(response.search_query)
-            return response.search_query
+            return response.search_query, response.filter
         except Exception as e:
             logger.error(f"Search query generation failed: {str(e)}")
-            # Fallback to user query
-            return conversation.user_query
+            # Fallback to user query with no filter
+            return conversation.user_query, ""
     
-    async def execute_search(self, query: str, conversation: ContentConversation, azure_search: AzureAISearchService) -> List[SearchResult]:
+    async def execute_search(self, query: str, filter_str: str, conversation: ContentConversation, azure_search: AzureAISearchService) -> List[SearchResult]:
         """Execute search with proper error handling"""
         try:
             results = azure_search.run_search(
                 search_query=query,
-                processed_ids=conversation.processed_ids
+                processed_ids=conversation.processed_ids,
+                provenance_filter=filter_str if filter_str else None
             )
 
             conversation.current_results = results
@@ -212,6 +248,7 @@ class ContentService:
                 "details": {
                     "user_query": conversation.user_query,
                     "generated_search_query": query,
+                    "provenance_filter": filter_str if filter_str else "None",
                     "results_summary": [
                         # The chunk ID may not be super useful here, but it can help track which chunks were returned. If we change the indexing to include source_file, we should use that here instead
                         {"chunk_id": result["chunk_id"]}
