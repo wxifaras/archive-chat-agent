@@ -216,7 +216,8 @@ class AzureAISearchService:
                     "file_type": file_type,
                     "chunk_content": chunk['chunked_text'],
                     "chunk_content_vector": embedding,
-                    "page_number": page
+                    "page_number": page,
+                    "Provenance_Source": str(email_item.Provenance_Source) if email_item.Provenance_Source is not None else None
                 })
 
         result = self.search_client.upload_documents(documents=documents)
