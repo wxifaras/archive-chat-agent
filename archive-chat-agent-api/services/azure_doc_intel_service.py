@@ -1,6 +1,6 @@
 from azure.core.credentials import AzureKeyCredential
-from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+from azure.ai.documentintelligence.aio import DocumentIntelligenceClient
 from core.settings import settings
 
 class AzureDocIntelService:
@@ -15,10 +15,10 @@ class AzureDocIntelService:
             endpoint=settings.AZURE_DOCUMENTINTELLIGENCE_ENDPOINT, credential=AzureKeyCredential(settings.AZURE_DOCUMENTINTELLIGENCE_API_KEY)
         )
 
-    def extract_content(self, url: str):
-        poller = self.document_intelligence_client.begin_analyze_document(
+    async def extract_content(self, url: str):
+        poller = await self.document_intelligence_client.begin_analyze_document(
             "prebuilt-layout", AnalyzeDocumentRequest(url_source=url)
         )
         
-        result = poller.result()
+        result = await poller.result()
         return result
