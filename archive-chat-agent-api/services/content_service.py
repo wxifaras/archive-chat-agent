@@ -5,13 +5,14 @@ from pydantic import ValidationError
 import tiktoken
 import time
 from fastapi import UploadFile
-from services.azure_ai_search_service import AzureAISearchService
+from services.azure_ai_search_service import AzureAISearchService, SearchResult
 from services.azure_doc_intel_service import AzureDocIntelService
 from services.azure_storage_service import AzureStorageService
 from core.settings import settings
 from models.email_item import EmailItem, EmailList
 from models.chat_response import ChatResponse
 from services.azure_openai_service import AzureOpenAIService
+from models.content_conversation import ContentConversation, ConversationResult, ReviewDecision, SearchPromptResponse
 
 azure_search_service = AzureAISearchService()
 azure_doc_intell_service =AzureDocIntelService()
@@ -34,6 +35,8 @@ ch.setFormatter(formatter)
 
 # Add handler
 logger.addHandler(ch)
+
+MAX_ATTEMPTS = 3
 
 class ContentService:
     def __init__(self):
@@ -110,13 +113,318 @@ class ContentService:
             except Exception as e:
                 logger.error(f"Pydantic validation failed: {e}")
 
-    def search_content(self, user_id: str, session_id: str, message: str) -> ChatResponse:
-        # Implement search logic here
-        # For now, return a simple response
-        return ChatResponse(
-            response="This is a placeholder response. Implement your search logic here.",
-            metadata={"user_id": user_id, "session_id": session_id, "message": message}
-        )
+    async def chat_with_content(self, message: str, user_id: str, session_id: str):
+        """
+        Agentic RAG implementation to return the proper response based on the indexed content.
+        """
+        try:
+            # initialize conversation state
+            conversation = ContentConversation(
+                user_query=message,
+                max_attempts=MAX_ATTEMPTS
+            )
+
+            # Execute conversation workflow
+            result = await self.execute_conversation_workflow(conversation)
+
+            return {
+                "answer": result.final_answer,
+                "citations": result.citation,
+                "thought_process": result.thought_process,
+                "attempts": result.attempts,
+                "search_queries": result.search_queries
+            }
+        
+        except Exception as e:
+            logger.error(f"Chat workflow failed: {str(e)}")
+            return {
+                "answer": f"I encountered the following error processing your question. Please {str(e)}",
+                "citations": [],
+                "thought_process": [],
+                "attempts": 0,
+                "search_queries": []
+            }
+    
+    async def execute_conversation_workflow(self, conversation: ContentConversation) -> ConversationResult:
+        """Executes the agentic rag workflow"""
+        azure_openai = AzureOpenAIService()
+        azure_search = AzureAISearchService()
+        
+        # continue if we have not exceeded max attempts and conversation is not finalized
+        while conversation.should_continue():
+            # Generate and execute search
+            search_query = await self.generate_search_query(conversation, azure_openai)
+            search_results = await self.execute_search(search_query, conversation, azure_search)
+            
+            # Review results
+            await self.review_search_results(conversation, search_results, azure_openai)
+
+        # Generate final answer by synthesizing vetted results
+        final_answer = await self.generate_final_answer(conversation, azure_openai)
+
+        return conversation.to_result(final_answer)
+
+    async def generate_search_query(self, conversation: ContentConversation, azure_openai: AzureOpenAIService) -> str:
+        """Generate search query using the LLM based on the conversation history"""
+
+        logger.info(f"Generating search query for attempt {conversation.attempts + 1}")
+
+        from prompts.core_prompts import SEARCH_PROMPT
+        
+        # Build context more clearly
+        context_parts = [f"User Question: {conversation.user_query}"]
+        
+        if conversation.has_search_history():
+            context_parts.append("### Previous Search Attempts ###")
+            for i, (search, review) in enumerate(zip(conversation.search_history, conversation.reviews), 1):
+                context_parts.append(f"<Attempt {i}>\n")
+                context_parts.append(f"   search_query: {search['query']}\n")
+                context_parts.append(f"   review: {review}\n")
+        
+        context = "\n".join(context_parts)
+        
+        messages = [
+            {"role": "system", "content": SEARCH_PROMPT},
+            {"role": "user", "content": context}
+        ]
+        
+        try:
+            response = azure_openai.get_chat_response(messages, SearchPromptResponse)
+            conversation.add_search_attempt(response.search_query)
+            return response.search_query
+        except Exception as e:
+            logger.error(f"Search query generation failed: {str(e)}")
+            # Fallback to user query
+            return conversation.user_query
+    
+    async def execute_search(self, query: str, conversation: ContentConversation, azure_search: AzureAISearchService) -> List[SearchResult]:
+        """Execute search with proper error handling"""
+        try:
+            results = azure_search.run_search(
+                search_query=query,
+                processed_ids=conversation.processed_ids
+            )
+
+            conversation.current_results = results
+            
+            conversation.thought_process.append({
+                "step": "retrieve",
+                "details": {
+                    "user_query": conversation.user_query,
+                    "generated_search_query": query,
+                    "results_summary": [
+                        # The chunk ID may not be super useful here, but it can help track which chunks were returned. If we change the indexing to include source_file, we should use that here instead
+                        {"chunk_id": result["chunk_id"]}
+                        for result in results
+                    ]
+                }
+            })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Search execution failed for query '{query}': {str(e)}")
+            return []  # Return empty results to continue workflow
+
+    async def review_search_results(self, conversation: ContentConversation, search_results: List[SearchResult], azure_openai: AzureOpenAIService):
+        """
+        Review search results and determine which are valid/invalid for answering the user's question.
+        Uses Azure OpenAI to analyze relevance and make decisions about continuing or finalizing.
+        """
+
+        logger.info(f"Reviewing search results.")
+
+        try:
+            from prompts.core_prompts import SEARCH_REVIEW_PROMPT
+
+            # Format current search results for review
+            current_results_formatted = self.format_search_results_for_review(conversation.current_results)
+            
+            # Format previously vetted results (don't review these again)
+            vetted_results_formatted = self.format_search_results_for_review(conversation.vetted_results)
+            
+            # Format search history for context
+            search_history_formatted = self.format_search_history_for_review(conversation)
+            
+            # Construct the review prompt with all context
+            llm_input = f"""
+                User Question: {conversation.user_query}
+
+                <Current Search Results to review>
+                {current_results_formatted}
+                <end current search results to review>
+
+                <previously vetted results, do not review>
+                {vetted_results_formatted}
+                <end previously vetted results, do not review>
+
+                <Previous Attempts>
+                {search_history_formatted}
+                <end Previous Attempts>
+                """
+            
+            messages = [
+                {"role": "system", "content": SEARCH_REVIEW_PROMPT},
+                {"role": "user", "content": llm_input}
+            ]
+
+            # Get review decision from Azure OpenAI
+            review_decision = azure_openai.get_chat_response(messages, ReviewDecision)
+
+            conversation.thought_process.append({
+                "step": "review",
+                "details": {
+                    "review_thought_process": review_decision.thought_process,
+                    "valid_results": [
+                        {
+                            "chunk_id": conversation.current_results[idx]["chunk_id"],
+                        }
+                        for idx in review_decision.valid_results
+                    ],
+                    "invalid_results": [ 
+                        {
+                            "chunk_id": conversation.current_results[idx]["chunk_id"]
+                        }
+                        for idx in review_decision.invalid_results
+                    ],
+                    "decision": review_decision.decision
+                }
+            })
+
+            # Validate indices before using them as sometimes Azure OpenAI can return indices like [0,1,2,3,4] when you only have 2 results, causing an index error
+            current_results_count = len(conversation.current_results)
+            
+            # Filter out invalid indices to prevent IndexError
+            valid_indices = [idx for idx in review_decision.valid_results if 0 <= idx < current_results_count]
+            invalid_indices = [idx for idx in review_decision.invalid_results if 0 <= idx < current_results_count]
+            
+            # Log warnings if Azure OpenAI returned invalid indices
+            if len(valid_indices) != len(review_decision.valid_results):
+                invalid_valid_indices = [idx for idx in review_decision.valid_results if idx not in valid_indices]
+                logger.warning(f"Azure OpenAI returned invalid valid_results indices: {invalid_valid_indices}. Current results count: {current_results_count}")
+            
+            if len(invalid_indices) != len(review_decision.invalid_results):
+                invalid_invalid_indices = [idx for idx in review_decision.invalid_results if idx not in invalid_indices]
+                logger.warning(f"Azure OpenAI returned invalid invalid_results indices: {invalid_invalid_indices}. Current results count: {current_results_count}")
+
+            conversation.reviews.append(review_decision.thought_process)
+            conversation.decisions.append(review_decision.decision)
+
+            # add all valid results from this review to the vetted results list of the overall conversation
+            for idx in review_decision.valid_results:
+                result = conversation.current_results[idx]
+                conversation.vetted_results.append(result)
+                conversation.processed_ids.add(result["chunk_id"])
+            
+            # add all invalid results from this review to the discarded results list of the overall conversation
+            for idx in review_decision.invalid_results:
+                result = conversation.current_results[idx]
+                conversation.discarded_results.append(result)
+                conversation.processed_ids.add(result["chunk_id"])
+            
+            # resest the current results to empty for the next search
+            conversation.current_results = []
+            
+        except Exception as e:
+            logger.error(f"Search results review failed: {str(e)}")
+
+    def format_search_results_for_review(self, results: List[SearchResult]) -> str:
+        """Format search results for the review prompt with clear structure"""
+        if not results:
+            return "No results available."
+        
+        output_parts = ["\n=== Search Results ==="]
+        for i, result in enumerate(results, 0):
+            result_section = [
+                f"\nResult #{i}",
+                "=" * 80,
+                f"Chunk ID: {result.get('chunk_id', 'Unknown')}",
+                f"Source: {result.get('pursuit_name', 'Unknown')}",
+                "\n--- Content ---",
+                result.get('chunk_content', 'No content available'),
+                "--- End Content ---"
+            ]
+            output_parts.extend(result_section)
+        
+        return "\n".join(output_parts)
+
+    def format_search_history_for_review(self, conversation: ContentConversation) -> str:
+        """Format search history for context in the review prompt"""
+        if not conversation.search_history:
+            return "No previous search attempts."
+        
+        history_parts = ["\n=== Search History ==="]
+        for i, (search, review) in enumerate(zip(conversation.search_history, conversation.reviews), 1):
+            history_parts.extend([
+                f"<Attempt {i}>",
+                f"   Query: {search['query']}",
+                f"   Review: {review}",
+                "</Attempt>"
+            ])
+        
+        return "\n".join(history_parts)
+
+    async def generate_final_answer(self, conversation: ContentConversation, azure_openai: AzureOpenAIService) -> str:
+        """Generate final answer using Azure OpenAI with proper error handling"""
+        
+        logger.info(f"Generating final answer.")
+        
+        try:
+            if not conversation.vetted_results:
+                return "I couldn't find relevant information in the content documents to answer your question. Please try rephrasing your question or check if the information exists in the uploaded documents."
+            
+            # Format vetted results in the same way as review node
+            vetted_results_formatted = "\n=== Vetted Results ===\n"
+            for i, result in enumerate(conversation.vetted_results, 0):
+                result_parts = [
+                    f"\nResult #{i}",
+                    "=" * 80,
+                    f"ID: {result.get('chunk_id')}",
+                    "\n<Start Content>",
+                    "-" * 80,
+                    result.get('chunk_content'),
+                    "-" * 80,
+                    "<End Content>"
+                ]
+                vetted_results_formatted += "\n".join(result_parts)
+
+            final_prompt = """Create a comprehensive answer to the user's question using the vetted results."""
+            
+            llm_input = f"""Create a comprehensive answer to the user's question using the vetted results.
+
+                User Question: {conversation.user_query}
+
+                Vetted Results:
+                {vetted_results_formatted}
+
+                Synthesize these results into a clear, complete answer. If there were no vetted results, say you couldn't find any relevant information to answer the question.
+
+                Guidance:
+                - Always use valid markdown syntax. Try to use level 1 or level 2 headers for your sections.
+                - Cite your sources using the following format: some text <cit>file name - chunk id</cit>, some more text <cit>file name - chunk id> , etc.
+                - Only cite sources that are actually used in the answer."""
+
+            messages = [
+                {"role": "system", "content": final_prompt},
+                {"role": "user", "content": llm_input}
+            ]
+            
+            final_answer = azure_openai.get_chat_response_text(messages)
+            
+            conversation.thought_process.append({
+                "step": "response",
+                "details": {
+                    "final_answer": final_answer
+                }
+            })
+
+            logger.info(f"Sending final payload.")
+            
+            return final_answer
+            
+        except Exception as e:
+            logger.error(f"Final answer generation failed: {str(e)}")
+            return f"I encountered an error generating the final answer. Error: {str(e)}. Please try rephrasing your question."
 
     @staticmethod
     def chunk_text(allContent):

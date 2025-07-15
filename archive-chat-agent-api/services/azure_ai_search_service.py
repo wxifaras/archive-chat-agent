@@ -21,7 +21,7 @@ from azure.search.documents.indexes.models import (
     SearchIndex
 )
 import logging
-from typing import List, Set, Optional
+from typing import List, Set, Optional, TypedDict
 from pydantic import BaseModel, Field
 from core.settings import settings
 
@@ -44,6 +44,14 @@ ch.setFormatter(formatter)
 
 # Add handler
 logger.addHandler(ch)
+
+# Type Definitions
+class SearchResult(TypedDict):
+    id: str
+    content: str
+    source_file: str
+    source_pages: int
+    score: float
 
 class AzureAISearchService:
     def __init__(self): 
@@ -221,3 +229,44 @@ class AzureAISearchService:
             logger.info(f"Successfully uploaded {len(uploaded)} chunks.")
         
         return uploaded
+    
+    def run_search(
+            self,
+            search_query: str,
+            processed_ids: Set[str]
+            #category_filter: str | None = None,
+        ) -> List[SearchResult]:
+        """
+        Perform a search using Azure Cognitive Search with both semantic and vector queries.
+        """
+        query_vector = AzureOpenAIService().create_embedding(search_query)
+        vector_query = VectorizedQuery(
+            vector=query_vector,
+            k_nearest_neighbors=K_NEAREST_NEIGHBORS,
+            fields="chunk_content_vector",
+        )
+        filter_parts = []
+        if processed_ids:
+            ids_string = ','.join(processed_ids)
+            filter_parts.append(f"not search.in(chunk_id, '{ids_string}')")
+        # TODO: We will need a provenance filter based on the query (this will be Provenance_Source)
+        #if provenance_filter:
+        #    filter_parts.append(f"({category_filter})")
+        filter_str = " and ".join(filter_parts) if filter_parts else None
+
+        results = self.search_client.search(
+            search_text=search_query,
+            vector_queries=[vector_query],
+            filter=filter_str,
+            select=["chunk_id", "chunk_content", "file_name"],
+            top=NUM_SEARCH_RESULTS
+        )
+        search_results = []
+        for result in results:
+            search_result: SearchResult = {
+                "chunk_id": result["chunk_id"],
+                "chunk_content": result["chunk_content"],
+                "score": result["@search.score"]
+            }
+            search_results.append(search_result)
+        return search_results
