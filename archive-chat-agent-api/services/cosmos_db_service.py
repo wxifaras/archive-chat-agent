@@ -1,4 +1,3 @@
-
 from azure.identity import DefaultAzureCredential
 from azure.cosmos import CosmosClient, PartitionKey
 from core.settings import settings
