@@ -1,7 +1,7 @@
 import logging
 import os
 from typing import List
-from pydantic import ValidationError
+import uuid
 import tiktoken
 import time
 from fastapi import UploadFile
@@ -9,15 +9,17 @@ from services.azure_ai_search_service import AzureAISearchService, SearchResult
 from services.azure_doc_intel_service import AzureDocIntelService
 from services.azure_storage_service import AzureStorageService
 from core.settings import settings
-from models.email_item import EmailItem, EmailList
-from models.chat_response import ChatResponse
+from models.email_item import EmailList
 from services.azure_openai_service import AzureOpenAIService
 from models.content_conversation import ContentConversation, ConversationResult, ReviewDecision, SearchPromptResponse
+from models.chat_history import ChatMessage, Role
+from services.chat_history_manager import ChatHistoryManager
 
 azure_search_service = AzureAISearchService()
 azure_doc_intell_service =AzureDocIntelService()
 azure_storage_service = AzureStorageService()
 azure_openai_service = AzureOpenAIService()
+chat_history_manager = ChatHistoryManager()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(settings.LOG_LEVEL)
@@ -153,10 +155,17 @@ class ContentService:
         Agentic RAG implementation to return the proper response based on the indexed content.
         """
         try:
+
+            if not session_id:
+                session_id = str(uuid.uuid4())
+                logger.info(f"Generated new session ID: {session_id}")
+                
             # initialize conversation state
             conversation = ContentConversation(
                 user_query=message,
-                max_attempts=MAX_ATTEMPTS
+                max_attempts=MAX_ATTEMPTS,
+                user_id=user_id,
+                session_id=session_id
             )
 
             # Execute conversation workflow
@@ -183,6 +192,16 @@ class ContentService:
     async def execute_conversation_workflow(self, conversation: ContentConversation) -> ConversationResult:
         """Executes the agentic rag workflow"""
         
+        # Initialize chat message for user query
+        chat_message = ChatMessage(
+            user_id= conversation.user_id,
+            session_id=conversation.session_id,
+            role=Role.USER,
+            message=conversation.user_query
+        )
+                
+        chat_history_manager.add_message(chat_message)
+
         # continue if we have not exceeded max attempts and conversation is not finalized
         while conversation.should_continue():
             # Generate and execute search
@@ -222,7 +241,16 @@ class ContentService:
         ]
         
         try:
-            response = azure_openai_service.get_chat_response(messages, SearchPromptResponse)
+            response = await azure_openai_service.get_chat_response(messages, SearchPromptResponse)
+
+            chat_message = ChatMessage(
+                user_id=conversation.user_id,
+                session_id=conversation.session_id,
+                role=Role.ASSISTANT,
+                message=response.search_query)
+            
+            chat_history_manager.add_message(chat_message)
+
             conversation.add_search_attempt(response.search_query)
             return response.search_query, response.filter
         except Exception as e:
@@ -233,7 +261,7 @@ class ContentService:
     async def execute_search(self, query: str, filter_str: str, conversation: ContentConversation) -> List[SearchResult]:
         """Execute search with proper error handling"""
         try:
-            results = azure_search_service.run_search(
+            results = await azure_search_service.run_search(
                 search_query=query,
                 processed_ids=conversation.processed_ids,
                 provenance_filter=filter_str if filter_str else None
@@ -304,7 +332,7 @@ class ContentService:
             ]
 
             # Get review decision from Azure OpenAI
-            review_decision = azure_openai_service.get_chat_response(messages, ReviewDecision)
+            review_decision = await azure_openai_service.get_chat_response(messages, ReviewDecision)
 
             conversation.thought_process.append({
                 "step": "review",
@@ -439,13 +467,38 @@ class ContentService:
                 - Cite your sources using the following format: some text <cit>file name - chunk id</cit>, some more text <cit>file name - chunk id> , etc.
                 - Only cite sources that are actually used in the answer."""
 
+            chat_history = chat_history_manager.get_history(conversation.session_id)
+
+            # New Messages
             messages = [
                 {"role": "system", "content": final_prompt},
                 {"role": "user", "content": llm_input}
             ]
+
+            for msg in messages:
+                chat_message = ChatMessage(
+                    user_id=conversation.user_id,
+                    session_id=conversation.session_id,
+                    role=Role(msg["role"]),
+                    message=msg["content"]
+                )
+
+            chat_history_manager.add_message(chat_message)
+
+            for msg in chat_history:
+                messages.append({"role": msg.role, "content": msg.message})
             
-            final_answer = azure_openai_service.get_chat_response_text(messages)
-            
+            final_answer = await azure_openai_service.get_chat_response_text(messages)
+
+            chat_message = ChatMessage(
+                user_id=conversation.user_id,
+                session_id=conversation.session_id,
+                role=Role.ASSISTANT,
+                message=final_answer
+            )
+
+            chat_history_manager.add_message(chat_message)
+
             conversation.thought_process.append({
                 "step": "response",
                 "details": {

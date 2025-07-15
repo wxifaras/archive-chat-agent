@@ -231,7 +231,7 @@ class AzureAISearchService:
         
         return uploaded
     
-    def run_search(
+    async def run_search(
             self,
             search_query: str,
             processed_ids: Set[str],
@@ -240,7 +240,7 @@ class AzureAISearchService:
         """
         Perform a search using Azure Cognitive Search with both semantic and vector queries.
         """
-        query_vector = AzureOpenAIService().create_embedding(search_query)
+        query_vector = await self.openai_service.create_embedding(search_query)
         vector_query = VectorizedQuery(
             vector=query_vector,
             k_nearest_neighbors=K_NEAREST_NEIGHBORS,
@@ -257,7 +257,7 @@ class AzureAISearchService:
         
         filter_str = " and ".join(filter_parts) if filter_parts else None
 
-        results = self.search_client.search(
+        results = await self.search_client.search(
             search_text=search_query,
             vector_queries=[vector_query],
             filter=filter_str,
@@ -266,12 +266,14 @@ class AzureAISearchService:
             query_type="semantic",
             semantic_configuration_name="semantic-config"
         )
+
         search_results = []
-        for result in results:
+        async for result in results:
             search_result: SearchResult = {
                 "chunk_id": result["chunk_id"],
                 "chunk_content": result["chunk_content"],
                 "reranker_score": result["@search.reranker_score"],
             }
             search_results.append(search_result)
+
         return search_results

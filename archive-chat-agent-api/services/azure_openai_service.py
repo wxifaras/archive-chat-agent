@@ -52,12 +52,12 @@ class AzureOpenAIService:
         return message_content
     
     # This method is used to get a chat response from the Azure OpenAI service using the supplied response format for a structured output response
-    def get_chat_response(
+    async def get_chat_response(
             self,
             messages: List[Dict[str, str]],
             response_format: type
         ):
-        response = self.client.beta.chat.completions.parse(
+        response = await self.client.beta.chat.completions.parse(
             model=self.deployment_name,
             messages=messages,
             response_format=response_format
@@ -67,11 +67,11 @@ class AzureOpenAIService:
 
         return message_content
     
-    def get_chat_response_text(self, messages: List[Dict[str, str]]) -> str:
+    async def get_chat_response_text(self, messages: List[Dict[str, str]]) -> str:
         """
         Gets a simple text response from Azure OpenAI (non-streaming, no structured output)
         """
-        response = self.client.chat.completions.create(
+        response = await self.client.chat.completions.create(
             model=self.deployment_name,
             messages=messages
         )

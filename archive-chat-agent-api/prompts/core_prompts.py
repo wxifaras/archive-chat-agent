@@ -15,7 +15,6 @@ PROVENANCE_SOURCE_SYSTEM_PROMPT = """
     - "Web" - Web pages or online articles
     - "Unknown" - When source cannot be determined
 
-
     CLASSIFICATION INDICATORS:
     - Tweet: "tweet", "Twitter", "X.com"
     - Email: "email", "correspondence"

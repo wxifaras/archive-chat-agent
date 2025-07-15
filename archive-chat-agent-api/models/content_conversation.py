@@ -11,6 +11,8 @@ class SearchPromptResponse(BaseModel):
 @dataclass
 class ContentConversation:
     user_query: str
+    user_id: str 
+    session_id: str
     max_attempts: int = 3
     
     # State maintained while processing the agent rag workflow
@@ -60,7 +62,6 @@ class ConversationResult:
     thought_process: List[dict]
     attempts: int
     search_queries: List[str]
-
 
 NUM_SEARCH_RESULTS = 5
 

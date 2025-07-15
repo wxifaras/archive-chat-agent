@@ -19,7 +19,8 @@ class CosmosDBService:
 
     def upsert_item(self, item: dict):
         # Must include 'session_id' in the item
-        return self.container.upsert_item(item)
+        upsert_item = self.container.upsert_item(item)
+        return upsert_item
 
     def query_items(self, query: str, parameters=None, partition_key=None, **kwargs):
         return list(self.container.query_items(
