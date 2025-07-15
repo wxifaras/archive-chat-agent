@@ -64,20 +64,19 @@ async def upload_content(
         logger.error(f"Error processing upload_content request: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
     
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat")
 async def chat(
     user_id: Annotated[str, Form(...)],
     session_id: Annotated[str, Form(...)],
     message: Annotated[str, Form(...)]
 ):
     try:
-
         logger.info(f"Received chat request from user_id: {user_id}, session_id: {session_id}")
 
         if not user_id or not session_id or not message:
             raise HTTPException(status_code=400, detail="Missing required fields: user_id, session_id, or message")
 
-        chat_response = content_service.search_content(user_id=user_id, session_id=session_id, message=message)
+        chat_response = await content_service.chat_with_content(user_id=user_id, session_id=session_id, message=message)
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
         return {"error": str(e)}

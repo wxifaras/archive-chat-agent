@@ -1,6 +1,7 @@
 from openai import AsyncAzureOpenAI
 from core.settings import settings
 from prompts.core_prompts import PROVENANCE_SOURCE_SYSTEM_PROMPT
+from typing import List, Dict
 
 class AzureOpenAIService:
     def __init__(self):
@@ -48,4 +49,33 @@ class AzureOpenAIService:
         )
 
         message_content = response.choices[0].message.content
+        return message_content
+    
+    # This method is used to get a chat response from the Azure OpenAI service using the supplied response format for a structured output response
+    def get_chat_response(
+            self,
+            messages: List[Dict[str, str]],
+            response_format: type
+        ):
+        response = self.client.beta.chat.completions.parse(
+            model=self.deployment_name,
+            messages=messages,
+            response_format=response_format
+        )
+
+        message_content = response.choices[0].message.parsed
+
+        return message_content
+    
+    def get_chat_response_text(self, messages: List[Dict[str, str]]) -> str:
+        """
+        Gets a simple text response from Azure OpenAI (non-streaming, no structured output)
+        """
+        response = self.client.chat.completions.create(
+            model=self.deployment_name,
+            messages=messages
+        )
+        
+        message_content = response.choices[0].message.content
+        
         return message_content
