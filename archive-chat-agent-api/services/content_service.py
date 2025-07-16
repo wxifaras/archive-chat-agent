@@ -13,7 +13,6 @@ from models.email_item import EmailList
 from services.azure_openai_service import AzureOpenAIService
 from models.content_conversation import ContentConversation, ConversationResult, ReviewDecision, SearchPromptResponse
 from models.chat_history import ChatMessage, Role
-from services.chat_history_manager import ChatHistoryManager
 from services.in_memory_chat_history_manager import InMemoryChatHistoryManager
 
 azure_search_service = AzureAISearchService()
@@ -22,6 +21,7 @@ azure_storage_service = AzureStorageService()
 azure_openai_service = AzureOpenAIService()
 
 if not settings.USE_IN_MEMORY_CHAT_HISTORY:
+    from services.chat_history_manager import ChatHistoryManager
     chat_history_manager = ChatHistoryManager()
 else:
     chat_history_manager = InMemoryChatHistoryManager()
