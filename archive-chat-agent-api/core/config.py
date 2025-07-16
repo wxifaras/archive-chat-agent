@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     COSMOS_DATABASE_NAME: str
     COSMOS_CONTAINER_NAME: str
     COSMOS_ENDPOINT: str
+    USE_IN_MEMORY_CHAT_HISTORY: bool = False
 
     # Optional logging settings
     LOG_LEVEL: str = "INFO"
