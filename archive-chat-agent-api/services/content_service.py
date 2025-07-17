@@ -16,7 +16,7 @@ from models.chat_history import ChatMessage, Role
 from services.in_memory_chat_history_manager import InMemoryChatHistoryManager
 
 azure_search_service = AzureAISearchService()
-azure_doc_intell_service =AzureDocIntelService()
+azure_doc_intell_service = AzureDocIntelService()
 azure_storage_service = AzureStorageService()
 azure_openai_service = AzureOpenAIService()
 
@@ -52,6 +52,124 @@ class ContentService:
         ]):
             raise ValueError("Required settings are missing")
         
+    async def process_existing_blobs(self):
+        """Process existing blobs by grouping them by folder and processing each folder as a unit"""
+        blob_list = await azure_storage_service.get_blobs()
+        
+        # Group blobs by folder (project ID)
+        folders = {}
+        for blob in blob_list:
+            # Extract folder name (everything before the first '/')
+            if '/' in blob:
+                folder_name = blob.split('/')[0]
+                file_name = blob.split('/', 1)[1]  # Everything after first '/'
+                
+                if folder_name not in folders:
+                    folders[folder_name] = {
+                        'json_files': [],
+                        'attachment_files': []
+                    }
+                
+                # Categorize files
+                if file_name.endswith('.json'):
+                    folders[folder_name]['json_files'].append({
+                        'blob_path': blob,
+                        'file_name': file_name,
+                    })
+                else:
+                    folders[folder_name]['attachment_files'].append({
+                        'blob_path': blob,
+                        'file_name': file_name,
+                    })
+        
+        # Process each folder
+        for folder_name, files in folders.items():
+            try:
+                await self.process_folder(folder_name, files)
+            except Exception as e:
+                logger.error(f"Error processing folder {folder_name}: {e}")
+    
+    async def process_folder(self, folder_name: str, files: dict):
+        """Process a single folder containing JSON and attachment files"""
+        json_files = files['json_files']
+        attachment_files = files['attachment_files']
+        
+        if not json_files:
+            logger.warning(f"No JSON files found in folder {folder_name}, skipping...")
+            return
+        
+        if len(json_files) > 1:
+            logger.warning(f"Multiple JSON files found in folder {folder_name}, skipping...")
+            return
+        
+        # Get the JSON file (taking the first one if multiple exist)
+        json_file = json_files[0]
+        
+        logger.info(f"Processing folder {folder_name} with JSON: {json_file['file_name']} and {len(attachment_files)} attachments")
+        
+        document_id = str(uuid.uuid4())
+
+        try:
+            # Download JSON content
+            json_content = await azure_storage_service.get_blob(json_file['blob_path'])
+            json_str = json_content if isinstance(json_content, str) else json_content.decode('utf-8')
+            
+            # Parse the JSON to get email item for processing
+            email_list = EmailList.model_validate_json(json_str)
+            email_item = email_list.root[0]
+
+            await azure_search_service.create_index()
+            
+            if len(attachment_files) == 0:
+                provenance_source = await azure_openai_service.get_source_from_provenance(email_item.Provenance)
+                email_item.Provenance_Source = provenance_source
+
+            if len(email_item.text) == 0:
+                email_item.text = "No text content."
+
+            jsonText = self.chunk_json_text(email_item.text)       
+
+            await azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file['file_name'], file_type="json")
+
+            # process all attachment files
+            for attachment_file in attachment_files:
+                try:
+                    # Use original filename for file extension and indexing
+                    root, ext = os.path.splitext(attachment_file['file_name'])
+                    
+                    email_item.Provenance_Source = ext[1:]
+
+                    sas_url = azure_storage_service.generate_blob_sas_url(attachment_file['blob_path'])
+
+                    # Encode the SAS URL to handle special characters                    
+                    sas_url = self.encode_sas_url(sas_url)
+
+                    time.sleep(5)
+
+                    allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
+                    attachmentChunks = self.chunk_text(allExtractedContent)
+
+                    logger.info(f"Indexing attachment {attachment_file['file_name']} with {len(attachmentChunks)} chunks")
+
+                    await azure_search_service.index_content(
+                        attachmentChunks, 
+                        document_id, 
+                        email_item, 
+                        file_name=attachment_file['file_name'],  # Use original filename for indexing
+                        file_type=ext[1:],
+                        page_number = [chunk['pages'] for chunk in attachmentChunks]
+                    )
+
+                except Exception as e:
+                    logger.error(f"Error downloading attachment {attachment_file['blob_path']}: {e}")
+                    continue
+            
+            # Process the content using existing logic
+            logger.info(f"Successfully processed folder {folder_name}")
+            
+        except Exception as e:
+            logger.error(f"Error processing folder {folder_name}: {e}")
+
     async def process_content(
             self, 
             document_id: str,

@@ -59,6 +59,12 @@ class AzureStorageService:
                 return part.split("=", 1)[1]
         raise ValueError("AccountKey not found in connection string.")
     
+    async def get_blobs(self) -> list[str]:
+        blobs = []
+        async for blob in self.container_client.list_blobs():
+            blobs.append(blob.name)
+        return blobs
+
     async def get_blob(self, blob_path: str) -> str:
         blob_client = self.container_client.get_blob_client(blob_path)
 

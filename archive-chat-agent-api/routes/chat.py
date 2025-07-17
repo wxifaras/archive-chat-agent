@@ -28,6 +28,20 @@ ch.setFormatter(formatter)
 # Add handler
 logger.addHandler(ch)
 
+@router.post("/process_existing_blobs")
+async def process_existing_blobs():
+    logger.info("Processing existing blobs")
+
+    try:
+        await content_service.process_existing_blobs()
+    except Exception as e:
+        logger.error(f"Error processing existing blobs: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    return {
+            "message": f"Processed content for existing blobs successfully"
+        }
+
 @router.post("/upload_content")
 async def upload_content(
     document_id: Annotated[str, Form(...)],
