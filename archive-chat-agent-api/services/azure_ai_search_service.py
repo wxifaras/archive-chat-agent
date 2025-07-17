@@ -25,7 +25,6 @@ from typing import List, Set, Optional, TypedDict
 from pydantic import BaseModel, Field
 from core.settings import settings
 
-NUM_SEARCH_RESULTS = 5
 K_NEAREST_NEIGHBORS = 30
 
 logger = logging.getLogger(__name__)
@@ -266,7 +265,7 @@ class AzureAISearchService:
             vector_queries=[vector_query],
             filter=filter_str,
             select=["chunk_id", "chunk_content", "file_name", "Provenance"],
-            top=NUM_SEARCH_RESULTS,
+            top=settings.NUM_SEARCH_RESULTS,
             query_type="semantic",
             semantic_configuration_name="semantic-config"
         )

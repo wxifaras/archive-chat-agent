@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     AZURE_AI_SEARCH_SERVICE_ENDPOINT: str
     AZURE_AI_SEARCH_SERVICE_KEY: str
     AZURE_AI_SEARCH_INDEX_NAME: str
+    NUM_SEARCH_RESULTS: int = Field(default=5)
     COSMOS_DATABASE_NAME: str
     COSMOS_CONTAINER_NAME: str
     COSMOS_ENDPOINT: str
