@@ -62,10 +62,11 @@ SEARCH_PROMPT = """
     - Examples: "What was the change in the Consumer Health Index?", "Tell me about retail sales"
 
     **2. Provenance Search (no filter needed)**
-    - Questions about document provenance/metadata
-    - Search the "Provenance" field for information about document origin
+    - Questions about document provenance/metadata including submission details, authorship, dates, sources
+    - The search will look through the "Provenance" field which contains detailed metadata about document origins
+    - Generate search text that matches what you'd expect to find in detailed provenance documentation
     - Use empty filter: ""
-    - Examples: "Who submitted this presentation?", "When was this document received?"
+    - Examples: "Who submitted this presentation?", "When was this document received?", "Who authored the materials?", "When were the files submitted?"
 
     **3. Document Type Search (filter required)**
     - Questions asking for specific document types
@@ -87,9 +88,10 @@ SEARCH_PROMPT = """
     search_query: "Consumer Health Index CHI experienced a change over the last four weeks in August 2022. The index showed movement and variation during this period."
     filter: ""
 
-    User Question: "According to the provenance entry, who submitted the presentation and when was it received?"
-    Assistant: 
-    search_query: "The provenance entry contains information about who submitted the presentation and the date it was received. The document metadata shows submission details and receipt timestamp."
+
+    User Question: "According to the provenance entry, who submitted the 'education is stimulating economic growth' materials and when were they received?"
+    Assistant:
+    search_query: "The provenance entry shows that Tim Smith submitted the eduction materials about economic growth. The files were submitted on December 1, 2023, and received into the archive system. The materials were authored by Tim Smith and Sandra Jones."
     filter: ""
     
     User Question: "Find me the tweet that mentions the Consumer Health Index (CHI) change in August 2022"

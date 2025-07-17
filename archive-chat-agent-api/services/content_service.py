@@ -407,11 +407,20 @@ class ContentService:
                 f"\nResult #{i}",
                 "=" * 80,
                 f"Chunk ID: {result.get('chunk_id', 'Unknown')}",
-                f"Source: {result.get('pursuit_name', 'Unknown')}",
+                f"File Name: {result.get('file_name', 'Unknown')}",
                 "\n--- Content ---",
                 result.get('chunk_content', 'No content available'),
                 "--- End Content ---"
             ]
+            
+            # Include provenance if available and not empty
+            if result.get('provenance') and result.get('provenance').strip():
+                result_section.extend([
+                    "\n--- Provenance ---",
+                    result.get('provenance'),
+                    "--- End Provenance ---"
+                ])
+            
             output_parts.extend(result_section)
         
         return "\n".join(output_parts)
@@ -448,12 +457,24 @@ class ContentService:
                     f"\nResult #{i}",
                     "=" * 80,
                     f"ID: {result.get('chunk_id')}",
+                    f"File Name: {result.get('file_name', 'Unknown')}",
                     "\n<Start Content>",
                     "-" * 80,
                     result.get('chunk_content'),
                     "-" * 80,
                     "<End Content>"
                 ]
+                
+                # Include provenance if available
+                if result.get('provenance') and result.get('provenance').strip():
+                    result_parts.extend([
+                        "\n<Start Provenance>",
+                        "-" * 80,
+                        result.get('provenance'),
+                        "-" * 80,
+                        "<End Provenance>"
+                    ])
+                
                 vetted_results_formatted += "\n".join(result_parts)
 
             final_prompt = """Create a comprehensive answer to the user's question using the vetted results."""

@@ -47,10 +47,11 @@ logger.addHandler(ch)
 
 # Type Definitions
 class SearchResult(TypedDict):
-    id: str
-    content: str
-    source_file: str
+    chunk_id: str
+    chunk_content: str
+    file_name: str
     source_pages: int
+    provenance: str
     reranker_score: float
 
 class AzureAISearchService:
@@ -82,7 +83,6 @@ class AzureAISearchService:
             SimpleField(name="Received_Date", type=SearchFieldDataType.DateTimeOffset, filterable=True),
             SimpleField(name="Key_Topics", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="Email_body", type=SearchFieldDataType.String, filterable=True),
-            SimpleField(name="Provenance", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="Email_ID", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="URL_Index", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="URL_Type", type=SearchFieldDataType.String, filterable=True),
@@ -105,6 +105,7 @@ class AzureAISearchService:
             SimpleField(name="POV_Rating", type=SearchFieldDataType.Int32, filterable=True),
             SimpleField(name="Comments", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="Timestamp", type=SearchFieldDataType.String, filterable=True),
+            SearchableField(name="Provenance", type=SearchFieldDataType.String, searchable=True, retrievable=True),
             SimpleField(name="Provenance_Source", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="chunk_id", type=SearchFieldDataType.String, filterable=True, key=True),
             SimpleField(name="file_name", type=SearchFieldDataType.String, filterable=True),
@@ -139,7 +140,10 @@ class AzureAISearchService:
         semantic_config = SemanticConfiguration(
             name="semantic-config",
             prioritized_fields=SemanticPrioritizedFields(
-                content_fields=[SemanticField(field_name="chunk_content")],
+                content_fields=[
+                    SemanticField(field_name="chunk_content"),
+                    SemanticField(field_name="Provenance")
+                ],
                 title_field=SemanticField(field_name="projectId")
             )
         )
@@ -261,7 +265,7 @@ class AzureAISearchService:
             search_text=search_query,
             vector_queries=[vector_query],
             filter=filter_str,
-            select=["chunk_id", "chunk_content", "file_name"],
+            select=["chunk_id", "chunk_content", "file_name", "Provenance"],
             top=NUM_SEARCH_RESULTS,
             query_type="semantic",
             semantic_configuration_name="semantic-config"
@@ -273,6 +277,8 @@ class AzureAISearchService:
                 "chunk_id": result["chunk_id"],
                 "chunk_content": result["chunk_content"],
                 "reranker_score": result["@search.reranker_score"],
+                "file_name": result.get("file_name", ""),
+                "provenance": result.get("Provenance", ""),
             }
             search_results.append(search_result)
 
