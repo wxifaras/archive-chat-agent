@@ -27,18 +27,17 @@ class ChatHistoryManager:
     def __init__(self):
         pass
 
-    def add_message(self, msg_in: ChatMessage):
+    async def add_message(self, msg_in: ChatMessage):
         data = msg_in.model_dump(mode="json")
         
         # Ensure 'id' is set if absent
         if not data.get("id"):
             data["id"] = str(uuid.uuid4())
-
-        cosmos_db_service.upsert_item(data)
+        await cosmos_db_service.upsert_item(data)
         logger.info(f"Message added to history: {data['id']} for session {data['session_id']}")
 
-    def get_history(self, session_id: str) -> list[ChatMessage]:
-        items = cosmos_db_service.query_items(
+    async def get_history(self, session_id: str) -> list[ChatMessage]:
+        items = await cosmos_db_service.query_items(
             query="SELECT * FROM c WHERE c.session_id=@sid ORDER BY c.timestamp ASC",
             parameters=[{"name": "@sid", "value": session_id}],
             partition_key=session_id       

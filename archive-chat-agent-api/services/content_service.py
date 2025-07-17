@@ -204,8 +204,8 @@ class ContentService:
             role=Role.USER,
             message=conversation.user_query
         )
-                
-        chat_history_manager.add_message(chat_message)
+
+        await chat_history_manager.add_message(chat_message)
 
         # continue if we have not exceeded max attempts and conversation is not finalized
         while conversation.should_continue():
@@ -254,7 +254,8 @@ class ContentService:
                 role=Role.ASSISTANT,
                 message=response.search_query)
             
-            chat_history_manager.add_message(chat_message)
+
+            await chat_history_manager.add_message(chat_message)
 
             conversation.add_search_attempt(response.search_query)
             return response.search_query, response.filter
@@ -472,7 +473,8 @@ class ContentService:
                 - Cite your sources using the following format: some text <cit>file name - chunk id</cit>, some more text <cit>file name - chunk id> , etc.
                 - Only cite sources that are actually used in the answer."""
 
-            chat_history = chat_history_manager.get_history(conversation.session_id)
+
+            chat_history = await chat_history_manager.get_history(conversation.session_id)
 
             # New Messages
             messages = [
@@ -488,7 +490,7 @@ class ContentService:
                     message=msg["content"]
                 )
 
-            chat_history_manager.add_message(chat_message)
+            await chat_history_manager.add_message(chat_message)
 
             for msg in chat_history:
                 messages.append({"role": msg.role, "content": msg.message})
@@ -502,7 +504,7 @@ class ContentService:
                 message=final_answer
             )
 
-            chat_history_manager.add_message(chat_message)
+            await chat_history_manager.add_message(chat_message)
 
             conversation.thought_process.append({
                 "step": "response",
