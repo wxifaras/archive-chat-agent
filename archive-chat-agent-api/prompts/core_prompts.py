@@ -88,7 +88,6 @@ SEARCH_PROMPT = """
     search_query: "Consumer Health Index CHI experienced a change over the last four weeks in August 2022. The index showed movement and variation during this period."
     filter: ""
 
-
     User Question: "According to the provenance entry, who submitted the 'education is stimulating economic growth' materials and when were they received?"
     Assistant:
     search_query: "The provenance entry shows that Tim Smith submitted the eduction materials about economic growth. The files were submitted on December 1, 2023, and received into the archive system. The materials were authored by Tim Smith and Sandra Jones."
