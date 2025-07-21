@@ -5,6 +5,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import ValidationError
 from core.settings import settings
 from services.content_service import ContentService
+from services.chat_history_manager import cosmos_db_service
 from models.chat_response import ChatResponse
 
 router = APIRouter()
@@ -70,6 +71,7 @@ async def chat(
     session_id: Annotated[str, Form(...)],
     message: Annotated[str, Form(...)]
 ):
+    await cosmos_db_service.init_client()
     try:
         logger.info(f"Received chat request from user_id: {user_id}, session_id: {session_id}")
 
@@ -83,5 +85,9 @@ async def chat(
     except Exception as e:
         logger.error(f"Error processing chat request: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        await cosmos_db_service.close()
+        logger.info("Cosmos DB client closed after chat response.")
 
     return chat_response
