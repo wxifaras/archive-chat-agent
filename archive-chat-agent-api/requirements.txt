@@ -10,3 +10,6 @@ tiktoken
 azure-search-documents
 azure-cosmos
 azure-identity
+azure-ai-projects==1.0.0b11
+azure-ai-agents==1.0.0
+azure-search-documents==11.6.0b12

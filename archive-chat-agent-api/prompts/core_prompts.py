@@ -112,8 +112,12 @@ SEARCH_PROMPT = """
     Assistant:
     search_query: "Consumer behavior patterns, trends, and analysis are covered in this document. The content discusses how consumers make purchasing decisions and market behavior."
     filter: "Provenance_Source eq 'pdf'"
-
     """
+
+AGENTIC_RETRIEVAL_PROMPT = """
+A content retrieval agent that can answer questions about content that has been archived from JSON documents and associated attachements such as PDFs, Word documents, and PowerPoints. JSON documents will have a provenance field that contains metadata about
+the document, including the source type (e.g., PDF, Word, PowerPoint, etc.), which will need to be used for any questions related to the provenance of a document. If you do not have the answer, respond with "I don't know" and do not attempt to answer the question.
+"""
 
 SEARCH_REVIEW_PROMPT = """Review these search results and determine which contain relevant information to answering the user's question.
         

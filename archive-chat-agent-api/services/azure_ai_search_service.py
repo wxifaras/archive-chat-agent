@@ -18,8 +18,19 @@ from azure.search.documents.indexes.models import (
     SemanticPrioritizedFields,
     SemanticField,
     SemanticSearch,
-    SearchIndex
+    SearchIndex,
+    KnowledgeAgent,
+    KnowledgeAgentAzureOpenAIModel,
+    KnowledgeAgentTargetIndex,
+    KnowledgeAgentRequestLimits,
+    AzureOpenAIVectorizerParameters
 )
+from azure.search.documents.agent import KnowledgeAgentRetrievalClient
+from azure.search.documents.agent.models import KnowledgeAgentRetrievalRequest, KnowledgeAgentMessage, KnowledgeAgentMessageTextContent, KnowledgeAgentIndexParams
+from azure.ai.projects import AIProjectClient
+from azure.ai.agents.models import FunctionTool, ToolSet, ListSortOrder, AgentsNamedToolChoice, AgentsNamedToolChoiceType, FunctionName
+from azure.search.documents.agent import KnowledgeAgentRetrievalClient
+from prompts.core_prompts import AGENTIC_RETRIEVAL_PROMPT
 import logging
 from typing import List, Set, Optional, TypedDict
 from pydantic import BaseModel, Field
@@ -65,6 +76,118 @@ class AzureAISearchService:
         self.search_index_client = SearchIndexClient(settings.AZURE_AI_SEARCH_SERVICE_ENDPOINT, AzureKeyCredential(settings.AZURE_AI_SEARCH_SERVICE_KEY))
         self.search_client = SearchClient(settings.AZURE_AI_SEARCH_SERVICE_ENDPOINT, settings.AZURE_AI_SEARCH_INDEX_NAME, AzureKeyCredential(settings.AZURE_AI_SEARCH_SERVICE_KEY))
         self.openai_service = AzureOpenAIService()
+
+        # Initialize agentic retrieval components as None - will be set up asynchronously
+        self.agent = None
+        self.project_client = None
+        self.retrieval_agent = None
+        self.agentic_retrieval_client = None
+        self.thread = None
+        self.retrieval_results = {}
+        self.agentic_setup_complete = False
+
+    async def setup_agentic_retrieval(self):
+        """Setup agentic retrieval components asynchronously"""
+        if self.agentic_setup_complete:
+            return
+            
+        try:
+            # Create the knowledge agent
+            self.agent = KnowledgeAgent(
+                name="retrieval_agent",
+                models=[
+                    KnowledgeAgentAzureOpenAIModel(
+                        azure_open_ai_parameters=AzureOpenAIVectorizerParameters(
+                            resource_url=settings.AZURE_OPENAI_ENDPOINT,
+                            deployment_name=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                            model_name=settings.AZURE_OPENAI_DEPLOYMENT_NAME
+                        )
+                    )
+                ],
+                target_indexes=[
+                    KnowledgeAgentTargetIndex(
+                        index_name=settings.AZURE_AI_SEARCH_INDEX_NAME,
+                        default_reranker_threshold=2.5
+                    )
+                ],
+                request_limits=KnowledgeAgentRequestLimits(
+                    max_output_size=10000
+                )
+            )
+
+            await self.search_index_client.create_or_update_agent(self.agent)
+            logger.info("Knowledge agent 'retrieval_agent' created or updated successfully")
+
+            # Create project client
+            self.project_client = AIProjectClient(
+                endpoint=settings.AZURE_FOUNDRY_PROJECT_ENDPOINT, 
+                credential=AzureKeyCredential(settings.AZURE_FOUNDRY_PROJECT_KEY)
+            )
+
+            list(self.project_client.agents.list_agents())
+
+            agent = self.project_client.agents.create_agent(
+                model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                name="retrieval_agent",
+                instructions=AGENTIC_RETRIEVAL_PROMPT
+            )
+
+            print(f"AI agent 'retrieval_agent' created or updated successfully")
+
+            # Create retrieval client
+            self.agentic_retrieval_client = KnowledgeAgentRetrievalClient(
+                endpoint=settings.AZURE_AI_SEARCH_SERVICE_ENDPOINT, 
+                agent_name='retrieval_agent', 
+                credential=AzureKeyCredential(settings.AZURE_AI_SEARCH_SERVICE_KEY)
+            )
+
+            # Create thread
+            if self.project_client:
+                self.thread = self.project_client.agents.threads.create()
+                logger.info("Agent thread created successfully")
+
+            self._agentic_setup_complete = True
+            logger.info("Agentic retrieval setup completed successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to setup agentic retrieval: {e}")
+            # Don't raise the exception - allow the service to work without agentic retrieval
+            self._agentic_setup_complete = False
+
+    async def agentic_retrieval(self) -> str:
+        # Ensure agentic retrieval is set up
+        if not self._agentic_setup_complete:
+            await self.setup_agentic_retrieval()
+        
+        if not self.project_client or not self.thread:
+            raise RuntimeError("Agentic retrieval is not properly configured")
+        
+        try:
+            # Take the last 5 messages in the conversation
+            messages = self.project_client.agents.messages.list(self.thread.id, limit=5, order=ListSortOrder.DESCENDING)
+            # Reverse the order so the most recent message is last
+            messages = list(messages)
+            messages.reverse()
+            
+            if not self.agentic_retrieval_client:
+                raise RuntimeError("Agentic retrieval client is not initialized")
+                
+            retrieval_result = self.agentic_retrieval_client.retrieve(
+                retrieval_request=KnowledgeAgentRetrievalRequest(
+                    messages=[KnowledgeAgentMessage(role=msg["role"], content=[KnowledgeAgentMessageTextContent(text=msg.content[0].text)]) for msg in messages if msg["role"] != "system"],
+                    target_index_params=[KnowledgeAgentIndexParams(index_name=settings.AZURE_AI_SEARCH_INDEX_NAME, reranker_threshold=2.5)]
+                )
+            )
+
+            # Associate the retrieval results with the last message in the conversation
+            last_message = messages[-1]
+            self.retrieval_results[last_message.id] = retrieval_result
+
+            # Return the grounding response to the agent
+            return retrieval_result.response[0].content[0].text
+        except Exception as e:
+            logger.error(f"Error in agentic retrieval: {e}")
+            raise
 
     async def create_index(self) -> str:
         try:
@@ -282,3 +405,55 @@ class AzureAISearchService:
             search_results.append(search_result)
 
         return search_results
+    
+    async def run_agentic_retrieval(
+            self,
+            search_query: str,
+            processed_ids: Set[str],
+            provenance_filter: str | None = None,
+        ) -> List[SearchResult]:
+        """
+        Perform a search using Azure Search's Agentic Retrieval feature
+        """
+        # Ensure agentic retrieval is set up
+        if not self.agentic_setup_complete:
+            await self.setup_agentic_retrieval()
+
+        try:
+            functions = FunctionTool({self.agentic_retrieval})
+            toolset = ToolSet()
+            toolset.add(functions)
+            self.project_client.agents.enable_auto_function_calls(toolset)
+
+            message = self.project_client.agents.messages.create(
+                thread_id=self.thread.id,
+                role="user",
+                content=search_query
+            )
+
+            run = self.project_client.agents.runs.create_and_process(
+                thread_id=self.thread.id,
+                agent_id=self.retrieval_agent.id,
+                tool_choice=AgentsNamedToolChoice(type=AgentsNamedToolChoiceType.FUNCTION, function=FunctionName(name="agentic_retrieval")),
+                toolset=toolset
+            )
+            
+            if run.status == "failed":
+                logger.error(f"Agentic retrieval failed for query: {search_query}")
+                raise RuntimeError(f"Run failed: {run.last_error}")
+                
+            output = self.project_client.agents.messages.get_last_message_text_by_role(thread_id=self.thread.id, role="assistant").text.value
+
+            formatted_output = output.replace('.', '\n')
+            logger.info(f"Agent response: {formatted_output}")
+            
+            # You'll need to parse the output and convert it to SearchResult format
+            # This is a placeholder - you'll need to implement the parsing logic
+            # based on the actual format returned by your agentic retrieval
+            search_results = []
+            # TODO: Parse output and create SearchResult objects
+            
+            return search_results
+            
+        except Exception as e:
+            logger.error(f"Error in agentic retrieval: {e}")

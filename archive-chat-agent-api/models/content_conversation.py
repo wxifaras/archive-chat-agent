@@ -13,6 +13,7 @@ class ContentConversation:
     user_query: str
     user_id: str 
     session_id: str
+    use_agentic_retrieval: bool
     max_attempts: int = 3
     
     # State maintained while processing the agent rag workflow

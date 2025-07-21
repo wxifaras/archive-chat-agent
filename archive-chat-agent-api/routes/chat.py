@@ -99,3 +99,25 @@ async def chat(
         raise HTTPException(status_code=500, detail=str(e))
 
     return chat_response
+
+@router.post("/agentic_retrieval_chat")
+async def chat(
+    user_id: Annotated[str, Form(...)],
+    session_id: Annotated[str, Form(...)],
+    message: Annotated[str, Form(...)]
+):
+    try:
+        logger.info(f"Received agentic retrieval chat request from user_id: {user_id}, session_id: {session_id}")
+
+        if not user_id or not session_id or not message:
+            raise HTTPException(status_code=400, detail="Missing required fields: user_id, session_id, or message")
+
+        chat_response = await content_service.chat_with_content(user_id=user_id, session_id=session_id, message=message, use_agentic_retrieval=True)
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error processing chat request: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return chat_response

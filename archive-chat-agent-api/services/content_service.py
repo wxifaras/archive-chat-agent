@@ -273,7 +273,7 @@ class ContentService:
         
         return sas_url
 
-    async def chat_with_content(self, message: str, user_id: str, session_id: str):
+    async def chat_with_content(self, message: str, user_id: str, session_id: str, use_agentic_retrieval: bool = False):
         """
         Agentic RAG implementation to return the proper response based on the indexed content.
         """
@@ -288,7 +288,8 @@ class ContentService:
                 user_query=message,
                 max_attempts=MAX_ATTEMPTS,
                 user_id=user_id,
-                session_id=session_id
+                session_id=session_id,
+                use_agentic_retrieval=use_agentic_retrieval
             )
 
             # Execute conversation workflow
@@ -329,7 +330,12 @@ class ContentService:
         while conversation.should_continue():
             # Generate and execute search
             search_query, search_filter = await self.generate_search_query(conversation)
-            search_results = await self.execute_search(search_query, search_filter, conversation)
+            
+            # use the standard search or agentic retrieval search
+            if conversation.use_agentic_retrieval:
+                search_results = await self.execute_agentic_retrieval(search_query, search_filter, conversation)
+            else:
+                search_results = await self.execute_search(search_query, search_filter, conversation)
             
             # Review results
             await self.review_search_results(conversation, search_results)
@@ -385,6 +391,37 @@ class ContentService:
         """Execute search with proper error handling"""
         try:
             results = await azure_search_service.run_search(
+                search_query=query,
+                processed_ids=conversation.processed_ids,
+                provenance_filter=filter_str if filter_str else None
+            )
+
+            conversation.current_results = results
+            
+            conversation.thought_process.append({
+                "step": "retrieve",
+                "details": {
+                    "user_query": conversation.user_query,
+                    "generated_search_query": query,
+                    "provenance_filter": filter_str if filter_str else "None",
+                    "results_summary": [
+                        # The chunk ID may not be super useful here, but it can help track which chunks were returned. If we change the indexing to include source_file, we should use that here instead
+                        {"chunk_id": result["chunk_id"]}
+                        for result in results
+                    ]
+                }
+            })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Search execution failed for query '{query}': {str(e)}")
+            return []  # Return empty results to continue workflow
+    
+    async def execute_agentic_retrieval(self, query: str, filter_str: str, conversation: ContentConversation) -> List[SearchResult]:
+        """Execute search with proper error handling"""
+        try:
+            results = await azure_search_service.run_agentic_retrieval(
                 search_query=query,
                 processed_ids=conversation.processed_ids,
                 provenance_filter=filter_str if filter_str else None
