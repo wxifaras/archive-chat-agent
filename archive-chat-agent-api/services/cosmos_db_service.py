@@ -16,6 +16,8 @@ class CosmosDBService:
     async def init_client(self):
         if self.client is None:
             self.client = CosmosClient(url=settings.COSMOS_ENDPOINT, credential=self.credential)
+            self.database = self.client.get_database_client(settings.COSMOS_DATABASE_NAME)
+            self.container = self.database.get_container_client(settings.COSMOS_CONTAINER_NAME)
 
     async def close(self):
         if self.client:
@@ -25,17 +27,11 @@ class CosmosDBService:
             await self.credential.close()
 
     async def upsert_item(self, item: dict):
-        await self.init_client()
-        database = self.client.get_database_client(settings.COSMOS_DATABASE_NAME)
-        container = database.get_container_client(settings.COSMOS_CONTAINER_NAME)
-        upsert_item = await container.upsert_item(item)
+        upsert_item = await self.container.upsert_item(item)
         return upsert_item
 
     async def query_items(self, query: str, parameters=None, partition_key=None, **kwargs):
-        await self.init_client()
-        database = self.client.get_database_client(settings.COSMOS_DATABASE_NAME)
-        container = database.get_container_client(settings.COSMOS_CONTAINER_NAME)
-        items_iter = container.query_items(
+        items_iter = self.container.query_items(
             query=query,
             parameters=parameters or [],
             partition_key=partition_key,
