@@ -184,6 +184,11 @@ class AzureAISearchService:
             # Return the grounding response to the agent
             content_text = retrieval_result.response[0].content[0].text
             logger.info(f"Agentic retrieval response: {content_text}")
+
+            retrieval_result = self.retrieval_results.get(last_message.id)
+            if retrieval_result is None:
+                raise RuntimeError(f"No retrieval results found for message {last_message.id}")
+
             return content_text
         except Exception as e:
             logger.error(f"Error in agentic retrieval: {e}")
