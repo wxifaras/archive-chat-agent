@@ -473,7 +473,6 @@ class ContentService:
                 - Cite your sources using the following format: some text <cit>file name - chunk id</cit>, some more text <cit>file name - chunk id> , etc.
                 - Only cite sources that are actually used in the answer."""
 
-
             chat_history = await chat_history_manager.get_history(conversation.session_id)
 
             # New Messages
