@@ -1,5 +1,5 @@
-from azure.identity import DefaultAzureCredential
-from azure.cosmos import CosmosClient, PartitionKey
+from azure.identity.aio import DefaultAzureCredential
+from azure.cosmos.aio import CosmosClient
 from core.settings import settings
 
 class CosmosDBService:
@@ -10,21 +10,34 @@ class CosmosDBService:
             settings.COSMOS_DATABASE_NAME
         ]):
             raise ValueError("Required Azure Cosmos DB settings are missing")
-        
-        credential = DefaultAzureCredential()
-        self.client = CosmosClient(url=settings.COSMOS_ENDPOINT, credential=credential)
-        self.database = self.client.get_database_client(settings.COSMOS_DATABASE_NAME)
-        self.container = self.database.get_container_client(settings.COSMOS_CONTAINER_NAME)
+        self.credential = DefaultAzureCredential()
+        self.client = None
 
-    def upsert_item(self, item: dict):
-        # Must include 'session_id' in the item
-        upsert_item = self.container.upsert_item(item)
+    async def init_client(self):
+        if self.client is None:
+            self.client = CosmosClient(url=settings.COSMOS_ENDPOINT, credential=self.credential)
+            self.database = self.client.get_database_client(settings.COSMOS_DATABASE_NAME)
+            self.container = self.database.get_container_client(settings.COSMOS_CONTAINER_NAME)
+
+    async def close(self):
+        if self.client:
+            await self.client.close()
+            self.client = None
+        if self.credential:
+            await self.credential.close()
+
+    async def upsert_item(self, item: dict):
+        upsert_item = await self.container.upsert_item(item)
         return upsert_item
 
-    def query_items(self, query: str, parameters=None, partition_key=None, **kwargs):
-        return list(self.container.query_items(
+    async def query_items(self, query: str, parameters=None, partition_key=None, **kwargs):
+        items_iter = self.container.query_items(
             query=query,
             parameters=parameters or [],
             partition_key=partition_key,
             **kwargs
-        ))
+        )
+        results = []
+        async for item in items_iter:
+            results.append(item)
+        return results

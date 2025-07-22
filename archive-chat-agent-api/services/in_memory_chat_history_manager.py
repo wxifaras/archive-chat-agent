@@ -20,7 +20,7 @@ class InMemoryChatHistoryManager:
         # Lock to protect concurrent access
         self._lock = threading.Lock()
 
-    def add_message(self, msg_in: ChatMessage):
+    async def add_message(self, msg_in: ChatMessage):
         data = msg_in.model_dump(mode="json")
         if not data.get("id"):
             data["id"] = str(uuid.uuid4())
@@ -32,7 +32,7 @@ class InMemoryChatHistoryManager:
 
         logger.info(f"(Message added: {data['id']} for session {session}")
 
-    def get_history(self, session_id: str) -> List[ChatMessage]:
+    async def get_history(self, session_id: str) -> List[ChatMessage]:
         with self._lock:
             items = list(self._store.get(session_id, []))
         # Sort by timestamp to ensure chronological order
