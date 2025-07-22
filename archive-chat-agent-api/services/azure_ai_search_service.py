@@ -153,8 +153,8 @@ class AzureAISearchService:
 
         except Exception as e:
             logger.error(f"Failed to setup agentic retrieval: {e}")
-            # Don't raise the exception - allow the service to work without agentic retrieval
             self.agentic_setup_complete = False
+            raise RuntimeError(f"Agentic retrieval setup failed: {e}") from e
 
     async def agentic_retrieval(self) -> str:
         # Ensure agentic retrieval is set up
