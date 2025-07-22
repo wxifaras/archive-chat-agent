@@ -101,7 +101,8 @@ class AzureAISearchService:
                         azure_open_ai_parameters=AzureOpenAIVectorizerParameters(
                             resource_url=settings.AZURE_OPENAI_ENDPOINT,
                             deployment_name=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-                            model_name=settings.AZURE_OPENAI_DEPLOYMENT_NAME
+                            model_name=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                            api_key=settings.AZURE_OPENAI_API_KEY
                         )
                     )
                 ],
