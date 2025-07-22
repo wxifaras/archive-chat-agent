@@ -128,7 +128,7 @@ class AzureAISearchService:
 
             list(self.project_client.agents.list_agents())
 
-            agent = self.project_client.agents.create_agent(
+            self.retrieval_agent = self.project_client.agents.create_agent(
                 model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
                 name="retrieval-agent",
                 instructions=AGENTIC_RETRIEVAL_PROMPT
