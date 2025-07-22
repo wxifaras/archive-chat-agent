@@ -7,7 +7,6 @@ azure-storage-blob[aio]
 azure-ai-documentintelligence
 openai
 tiktoken
-#azure-search-documents
 azure-cosmos
 azure-identity
 azure-ai-projects==1.0.0b11
