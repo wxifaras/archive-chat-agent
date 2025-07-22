@@ -122,7 +122,6 @@ class AzureAISearchService:
             # Create project client
             self.project_client = AIProjectClient(
                 endpoint=settings.AZURE_FOUNDRY_PROJECT_ENDPOINT, 
-                #credential=AzureKeyCredential(settings.AZURE_FOUNDRY_PROJECT_KEY)
                 credential=DefaultAzureCredential()
             )
 
@@ -156,11 +155,7 @@ class AzureAISearchService:
             self.agentic_setup_complete = False
             raise RuntimeError(f"Agentic retrieval setup failed: {e}") from e
 
-    async def agentic_retrieval(self) -> str:
-        # Ensure agentic retrieval is set up
-        if not self.agentic_setup_complete:
-            await self.setup_agentic_retrieval()
-        
+    def agentic_retrieval(self) -> str:
         if not self.project_client or not self.thread:
             raise RuntimeError("Agentic retrieval is not properly configured")
         
