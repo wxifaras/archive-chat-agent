@@ -32,11 +32,19 @@ class Settings(BaseSettings):
     COSMOS_CONTAINER_NAME: str
     COSMOS_ENDPOINT: str
     USE_IN_MEMORY_CHAT_HISTORY: bool = False
+    
+    # Evaluation settings
+    EVALUATION_MAX_CONCURRENT: int = Field(default=5, description="Maximum concurrent evaluations for parallel processing")
+    AZURE_OPENAI_EVALUATION_DEPLOYMENT_NAME: str = Field(default="gpt-4.1", description="Model deployment for evaluation tasks (separate from RAG pipeline model)")
+    EVALUATION_TEMPERATURE: float = Field(default=0.0, ge=0.0, le=2.0, description="Temperature for evaluation model (0.0 = deterministic, higher = more random)")
 
     # Optional logging settings
     LOG_LEVEL: str = "INFO"
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        case_sensitive=True
+    )
 
     @model_validator(mode='after')
     def check_required_fields(self) -> 'Settings':
