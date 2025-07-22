@@ -4,7 +4,7 @@ from azure.search.documents.aio import SearchClient
 from azure.search.documents.indexes.models import SearchIndex, SearchField, VectorSearch, VectorSearchProfile, HnswAlgorithmConfiguration, SemanticSearch, SemanticConfiguration, SemanticPrioritizedFields, SemanticField, AzureOpenAIVectorizer, AzureOpenAIVectorizerParameters
 from models.email_item import EmailItem
 from services.azure_openai_service import AzureOpenAIService
-from azure.core.credentials import AzureKeyCredential 
+from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.models import VectorizedQuery
 from azure.search.documents.indexes.models import (
     SimpleField,
@@ -30,6 +30,7 @@ from azure.search.documents.agent.models import KnowledgeAgentRetrievalRequest, 
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents.models import FunctionTool, ToolSet, ListSortOrder, AgentsNamedToolChoice, AgentsNamedToolChoiceType, FunctionName
 from azure.search.documents.agent import KnowledgeAgentRetrievalClient
+from azure.identity import DefaultAzureCredential
 from prompts.core_prompts import AGENTIC_RETRIEVAL_PROMPT
 import logging
 from typing import List, Set, Optional, TypedDict
@@ -94,7 +95,7 @@ class AzureAISearchService:
         try:
             # Create the knowledge agent
             self.agent = KnowledgeAgent(
-                name="retrieval_agent",
+                name="retrieval-agent",
                 models=[
                     KnowledgeAgentAzureOpenAIModel(
                         azure_open_ai_parameters=AzureOpenAIVectorizerParameters(
@@ -116,28 +117,29 @@ class AzureAISearchService:
             )
 
             await self.search_index_client.create_or_update_agent(self.agent)
-            logger.info("Knowledge agent 'retrieval_agent' created or updated successfully")
+            logger.info("Knowledge agent 'retrieval-agent' created or updated successfully")
 
             # Create project client
             self.project_client = AIProjectClient(
                 endpoint=settings.AZURE_FOUNDRY_PROJECT_ENDPOINT, 
-                credential=AzureKeyCredential(settings.AZURE_FOUNDRY_PROJECT_KEY)
+                #credential=AzureKeyCredential(settings.AZURE_FOUNDRY_PROJECT_KEY)
+                credential=DefaultAzureCredential()
             )
 
             list(self.project_client.agents.list_agents())
 
             agent = self.project_client.agents.create_agent(
                 model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-                name="retrieval_agent",
+                name="retrieval-agent",
                 instructions=AGENTIC_RETRIEVAL_PROMPT
             )
 
-            print(f"AI agent 'retrieval_agent' created or updated successfully")
+            print(f"AI agent 'retrieval-agent' created or updated successfully")
 
             # Create retrieval client
             self.agentic_retrieval_client = KnowledgeAgentRetrievalClient(
                 endpoint=settings.AZURE_AI_SEARCH_SERVICE_ENDPOINT, 
-                agent_name='retrieval_agent', 
+                agent_name='retrieval-agent', 
                 credential=AzureKeyCredential(settings.AZURE_AI_SEARCH_SERVICE_KEY)
             )
 
@@ -146,17 +148,17 @@ class AzureAISearchService:
                 self.thread = self.project_client.agents.threads.create()
                 logger.info("Agent thread created successfully")
 
-            self._agentic_setup_complete = True
+            self.agentic_setup_complete = True
             logger.info("Agentic retrieval setup completed successfully")
 
         except Exception as e:
             logger.error(f"Failed to setup agentic retrieval: {e}")
             # Don't raise the exception - allow the service to work without agentic retrieval
-            self._agentic_setup_complete = False
+            self.agentic_setup_complete = False
 
     async def agentic_retrieval(self) -> str:
         # Ensure agentic retrieval is set up
-        if not self._agentic_setup_complete:
+        if not self.agentic_setup_complete:
             await self.setup_agentic_retrieval()
         
         if not self.project_client or not self.thread:
@@ -270,11 +272,17 @@ class AzureAISearchService:
             )
         )
         
+        # Create semantic search with default configuration
+        semantic_search = SemanticSearch(
+            configurations=[semantic_config],
+            default_configuration_name="semantic-config"
+        )
+        
         idx = SearchIndex(
             name=settings.AZURE_AI_SEARCH_INDEX_NAME,
             fields=fields,
             vector_search=vector_search,
-            semantic_search=SemanticSearch(configurations=[semantic_config])
+            semantic_search=semantic_search
         )
 
         result = await self.search_index_client.create_or_update_index(idx)
