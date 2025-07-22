@@ -182,7 +182,9 @@ class AzureAISearchService:
             self.retrieval_results[last_message.id] = retrieval_result
 
             # Return the grounding response to the agent
-            return retrieval_result.response[0].content[0].text
+            content_text = retrieval_result.response[0].content[0].text
+            logger.info(f"Agentic retrieval response: {content_text}")
+            return content_text
         except Exception as e:
             logger.error(f"Error in agentic retrieval: {e}")
             raise
