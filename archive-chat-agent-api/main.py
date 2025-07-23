@@ -4,6 +4,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from core.settings import settings
 from services.content_service import ContentService
 from routes import chat  # Import the chat router
+from routes import evaluation  # Import the evaluation router
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -24,6 +25,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(chat.router, prefix="/api")
+app.include_router(evaluation.router)
 
 # Custom Swagger UI route
 @app.get("/docs", include_in_schema=False)

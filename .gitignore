@@ -206,3 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 archive-chat-agent-api/local.settings.json
+
+# Evaluation results
+archive-chat-agent-api/evaluation/results/
+archive-chat-agent-api/tests/validation_results/
