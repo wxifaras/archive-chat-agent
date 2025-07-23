@@ -380,7 +380,7 @@ class ContentService:
             
 
             await chat_history_manager.add_message(chat_message)
-
+            logger.info(f"Generated search query: {response.search_query}")
             conversation.add_search_attempt(response.search_query)
             return response.search_query, response.filter
         except Exception as e:
