@@ -348,6 +348,12 @@ class ContentService:
         
         # Build context more clearly
         context_parts = [f"User Question: {conversation.user_query}"]
+
+        chat_history = await chat_history_manager.get_history(conversation.session_id)
+        if chat_history:
+            context_parts.append("### Chat History ###")
+            for msg in chat_history:
+                context_parts.append(f"{msg.role}: {msg.message}")
         
         if conversation.has_search_history():
             context_parts.append("### Previous Search Attempts ###")
@@ -374,7 +380,7 @@ class ContentService:
             
 
             await chat_history_manager.add_message(chat_message)
-
+            logger.info(f"Generated search query: {response.search_query}")
             conversation.add_search_attempt(response.search_query)
             return response.search_query, response.filter
         except Exception as e:
