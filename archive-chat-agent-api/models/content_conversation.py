@@ -27,6 +27,7 @@ class ContentConversation:
     thought_process: List[dict] = field(default_factory=list)
     reviews: List[str] = field(default_factory=list)      # Thought processes from reviews
     decisions: List[str] = field(default_factory=list)    # Store the actual decisions
+    sub_queries: List[List[dict]] = field(default_factory=list)  # Store sub-queries from agentic retrieval
     
     def should_continue(self) -> bool:
         return self.attempts < self.max_attempts and not self.has_sufficient_results()
@@ -53,7 +54,8 @@ class ContentConversation:
             citations=self.vetted_results,
             thought_process=self.thought_process,
             attempts=self.attempts,
-            search_queries=[search["query"] for search in self.search_history]
+            search_queries=[search["query"] for search in self.search_history],
+            sub_queries=self.sub_queries
         )
     
 @dataclass
@@ -63,11 +65,20 @@ class ConversationResult:
     thought_process: List[dict]
     attempts: int
     search_queries: List[str]
+    sub_queries: List[List[dict]]
 
 NUM_SEARCH_RESULTS = 5
 
 # Create a type for indices from 0 to NUM_SEARCH_RESULTS-1
-SearchResultIndex = Literal[0, 1, 2, 3, 4]
+#SearchResultIndex = Literal[0, 1, 2, 3, 4]
+# Create a type for indices from 0 to 49 (50 possible results)
+SearchResultIndex = Literal[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+    40, 41, 42, 43, 44, 45, 46, 47, 48, 49
+]
 
 class ReviewDecision(BaseModel):
     """Schema for review agent decisions"""

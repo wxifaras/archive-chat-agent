@@ -33,9 +33,11 @@ from azure.search.documents.agent import KnowledgeAgentRetrievalClient
 from azure.identity import DefaultAzureCredential
 from prompts.core_prompts import AGENTIC_RETRIEVAL_PROMPT
 import logging
+import json
 from typing import List, Set, Optional, TypedDict
 from pydantic import BaseModel, Field
 from core.settings import settings
+import json
 
 K_NEAREST_NEIGHBORS = 30
 
@@ -413,9 +415,9 @@ class AzureAISearchService:
     async def run_agentic_retrieval(
             self,
             search_query: str,
-            processed_ids: Set[str],
-            provenance_filter: str | None = None,
-        ) -> List[SearchResult]:
+            #processed_ids: Set[str],
+            #provenance_filter: str | None = None,
+        ) -> tuple[List[str], List[dict]]:
         """
         Perform a search using Azure Search's Agentic Retrieval feature
         """
@@ -445,19 +447,34 @@ class AzureAISearchService:
             if run.status == "failed":
                 logger.error(f"Agentic retrieval failed for query: {search_query}")
                 raise RuntimeError(f"Run failed: {run.last_error}")
-                
+            
+            # these are all of the chunks it returned
+            # this is the synthesized result
             output = self.project_client.agents.messages.get_last_message_text_by_role(thread_id=self.thread.id, role="assistant").text.value
 
             formatted_output = output.replace('.', '\n')
             logger.info(f"Agent response: {formatted_output}")
             
-            # You'll need to parse the output and convert it to SearchResult format
-            # This is a placeholder - you'll need to implement the parsing logic
-            # based on the actual format returned by your agentic retrieval
-            search_results = []
-            # TODO: Parse output and create SearchResult objects
+            retrieval_result = self.retrieval_results.get(message.id)
+            #print("Retrieval activity")
+            #print(json.dumps([activity.as_dict() for activity in retrieval_result.activity], indent=2))
+            #print("Retrieval results")
+            #print(json.dumps([reference.as_dict() for reference in retrieval_result.references], indent=2))
+
+            # Extract content from the agentic retrieval response
+            agentic_retrieval_text = retrieval_result.response[0].content[0].text
+            response_data = json.loads(agentic_retrieval_text)
             
-            return search_results
+            # Extract just the content fields
+            content_list = []
+            for item in response_data:
+                if isinstance(item, dict) and 'content' in item:
+                    content_list.append(item['content'])
+            
+            # Extract activity data for sub-queries
+            activity_data = [activity.as_dict() for activity in retrieval_result.activity]
+            
+            return content_list, activity_data
             
         except Exception as e:
             logger.error(f"Error in agentic retrieval: {e}")

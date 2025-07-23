@@ -300,7 +300,8 @@ class ContentService:
                 "citations": result.citations,
                 "thought_process": result.thought_process,
                 "attempts": result.attempts,
-                "search_queries": result.search_queries
+                "search_queries": result.search_queries,
+                "sub_queries": result.sub_queries
             }
         
         except Exception as e:
@@ -338,7 +339,10 @@ class ContentService:
                 search_results = await self.execute_search(search_query, search_filter, conversation)
             
             # Review results
-            await self.review_search_results(conversation, search_results)
+            if conversation.use_agentic_retrieval:
+                await self.review_agentic_retrieval_search_results(conversation, search_results)
+            else:
+                await self.review_search_results(conversation, search_results)
 
         # Generate final answer by synthesizing vetted results
         final_answer = await self.generate_final_answer(conversation)
@@ -409,6 +413,7 @@ class ContentService:
                         {"chunk_id": result["chunk_id"]}
                         for result in results
                     ]
+                    # Note: sub_queries remain empty for traditional search, only populated for agentic retrieval
                 }
             })
             
@@ -421,25 +426,25 @@ class ContentService:
     async def execute_agentic_retrieval(self, query: str, filter_str: str, conversation: ContentConversation) -> List[SearchResult]:
         """Execute search with proper error handling"""
         try:
-            results = await azure_search_service.run_agentic_retrieval(
-                search_query=query,
-                processed_ids=conversation.processed_ids,
-                provenance_filter=filter_str if filter_str else None
+            results, activity_data = await azure_search_service.run_agentic_retrieval(
+                search_query=query
             )
 
             conversation.current_results = results
+            # Store the sub-queries/activity data for this search attempt
+            conversation.sub_queries.append(activity_data)
             
             conversation.thought_process.append({
                 "step": "retrieve",
                 "details": {
                     "user_query": conversation.user_query,
                     "generated_search_query": query,
-                    "provenance_filter": filter_str if filter_str else "None",
+                    "provenance_filter": "None",
                     "results_summary": [
-                        # The chunk ID may not be super useful here, but it can help track which chunks were returned. If we change the indexing to include source_file, we should use that here instead
-                        {"chunk_id": result["chunk_id"]}
+                        {"content": result}
                         for result in results
-                    ]
+                    ],
+                    "sub_queries": activity_data
                 }
             })
             
@@ -551,6 +556,96 @@ class ContentService:
         except Exception as e:
             logger.error(f"Search results review failed: {str(e)}")
 
+    async def review_agentic_retrieval_search_results(self, conversation: ContentConversation, search_results: List[SearchResult]):
+        """
+        Review search results and determine which are valid/invalid for answering the user's question.
+        Uses Azure OpenAI to analyze relevance and make decisions about continuing or finalizing.
+        """
+
+        logger.info(f"Reviewing search results.")
+
+        try:
+            from prompts.core_prompts import SEARCH_REVIEW_PROMPT
+
+            # Format current search results for review
+            current_results_formatted = self.format_agentic_retrieval_results_for_review(conversation.current_results)
+            
+            # Format previously vetted results (don't review these again)
+            vetted_results_formatted = self.format_agentic_retrieval_results_for_review(conversation.vetted_results)
+            
+            # Format search history for context
+            search_history_formatted = self.format_search_history_for_review(conversation)
+            
+            # Construct the review prompt with all context
+            llm_input = f"""
+                User Question: {conversation.user_query}
+
+                <Current Search Results to review>
+                {current_results_formatted}
+                <end current search results to review>
+
+                <previously vetted results, do not review>
+                {vetted_results_formatted}
+                <end previously vetted results, do not review>
+
+                <Previous Attempts>
+                {search_history_formatted}
+                <end Previous Attempts>
+                """
+            
+            messages = [
+                {"role": "system", "content": SEARCH_REVIEW_PROMPT},
+                {"role": "user", "content": llm_input}
+            ]
+
+            # Get review decision from Azure OpenAI
+            review_decision = await azure_openai_service.get_chat_response(messages, ReviewDecision)
+
+            conversation.thought_process.append({
+                "step": "review",
+                "details": {
+                    "review_thought_process": review_decision.thought_process,
+                    "valid_results": [
+                        {
+                            "content": conversation.current_results[idx] if idx < len(conversation.current_results) else f"Index {idx} out of range"
+                        }
+                        for idx in review_decision.valid_results
+                    ],
+                    "invalid_results": [ 
+                        {
+                            "content": conversation.current_results[idx] if idx < len(conversation.current_results) else f"Index {idx} out of range"
+                        }
+                        for idx in review_decision.invalid_results
+                    ],
+                    "decision": review_decision.decision
+                }
+            })
+
+            conversation.reviews.append(review_decision.thought_process)
+            conversation.decisions.append(review_decision.decision)
+
+            # add all valid results from this review to the vetted results list of the overall conversation
+            for idx in review_decision.valid_results:
+                if idx < len(conversation.current_results):
+                    result = conversation.current_results[idx]
+                    conversation.vetted_results.append(result)
+                    # For agentic retrieval, we use the content string as the ID since there's no chunk_id
+                    conversation.processed_ids.add(result)
+            
+            # add all invalid results from this review to the discarded results list of the overall conversation
+            for idx in review_decision.invalid_results:
+                if idx < len(conversation.current_results):
+                    result = conversation.current_results[idx]
+                    conversation.discarded_results.append(result)
+                    # For agentic retrieval, we use the content string as the ID since there's no chunk_id
+                    conversation.processed_ids.add(result)
+            
+            # resest the current results to empty for the next search
+            conversation.current_results = []
+            
+        except Exception as e:
+            logger.error(f"Search results review failed: {str(e)}")
+
     def format_search_results_for_review(self, results: List[SearchResult]) -> str:
         """Format search results for the review prompt with clear structure"""
         if not results:
@@ -579,6 +674,25 @@ class ContentService:
             output_parts.extend(result_section)
         
         return "\n".join(output_parts)
+    
+    def format_agentic_retrieval_results_for_review(self, results: List[SearchResult]) -> str:
+        """Format search results for the review prompt with clear structure"""
+        if not results:
+            return "No results available."
+        
+        output_parts = ["\n=== Search Results ==="]
+        for i, result in enumerate(results, 0):
+            result_section = [
+                f"\nResult #{i}",
+                "=" * 80,
+                "\n--- Content ---",
+                result,
+                "--- End Content ---"
+            ]
+
+            output_parts.extend(result_section)
+        
+        return "\n".join(output_parts)
 
     def format_search_history_for_review(self, conversation: ContentConversation) -> str:
         """Format search history for context in the review prompt"""
@@ -600,39 +714,67 @@ class ContentService:
         """Generate final answer using Azure OpenAI with proper error handling"""
         
         logger.info(f"Generating final answer.")
-        
+
         try:
             if not conversation.vetted_results:
                 return "I couldn't find relevant information in the content documents to answer your question. Please try rephrasing your question or check if the information exists in the uploaded documents."
             
-            # Format vetted results in the same way as review node
-            vetted_results_formatted = "\n=== Vetted Results ===\n"
-            for i, result in enumerate(conversation.vetted_results, 0):
-                result_parts = [
-                    f"\nResult #{i}",
-                    "=" * 80,
-                    f"ID: {result.get('chunk_id')}",
-                    f"File Name: {result.get('file_name', 'Unknown')}",
-                    "\n<Start Content>",
-                    "-" * 80,
-                    result.get('chunk_content'),
-                    "-" * 80,
-                    "<End Content>"
-                ]
-                
-                # Include provenance if available
-                if result.get('provenance') and result.get('provenance').strip():
-                    result_parts.extend([
-                        "\n<Start Provenance>",
+            # Handle different result formats based on search type
+            if conversation.use_agentic_retrieval:
+                # For agentic retrieval, vetted_results are strings (content only)
+                vetted_results_formatted = "\n=== Vetted Results ===\n"
+                for i, result in enumerate(conversation.vetted_results, 0):
+                    result_parts = [
+                        f"\nResult #{i}",
+                        "=" * 80,
+                        "\n<Start Content>",
                         "-" * 80,
-                        result.get('provenance'),
+                        result,  # result is already a string for agentic retrieval
                         "-" * 80,
-                        "<End Provenance>"
-                    ])
-                
-                vetted_results_formatted += "\n".join(result_parts)
+                        "<End Content>"
+                    ]
+                    vetted_results_formatted += "\n".join(result_parts)
+            else:
+                # For traditional search, vetted_results are dictionaries with metadata
+                vetted_results_formatted = "\n=== Vetted Results ===\n"
+                for i, result in enumerate(conversation.vetted_results, 0):
+                    result_parts = [
+                        f"\nResult #{i}",
+                        "=" * 80,
+                        f"ID: {result.get('chunk_id')}",
+                        f"File Name: {result.get('file_name', 'Unknown')}",
+                        "\n<Start Content>",
+                        "-" * 80,
+                        result.get('chunk_content'),
+                        "-" * 80,
+                        "<End Content>"
+                    ]
+                    
+                    # Include provenance if available
+                    if result.get('provenance') and result.get('provenance').strip():
+                        result_parts.extend([
+                            "\n<Start Provenance>",
+                            "-" * 80,
+                            result.get('provenance'),
+                            "-" * 80,
+                            "<End Provenance>"
+                        ])
+                    
+                    vetted_results_formatted += "\n".join(result_parts)
 
             final_prompt = """Create a comprehensive answer to the user's question using the vetted results."""
+            
+            # Create different citation guidance based on search type
+            if conversation.use_agentic_retrieval:
+                citation_guidance = """Guidance:
+                - Always use valid markdown syntax. Try to use level 1 or level 2 headers for your sections.
+                - Cite your sources using the following format: some text <cit>Chunk #0</cit>, some more text <cit>Chunk #1</cit>, etc.
+                - Only cite sources that are actually used in the answer."""
+            else:
+                citation_guidance = """Guidance:
+                - Always use valid markdown syntax. Try to use level 1 or level 2 headers for your sections.
+                - Cite your sources using the following format: some text <cit>file name - chunk id</cit>, some more text <cit>file name - chunk id</cit>, etc.
+                - Only cite sources that are actually used in the answer."""
             
             llm_input = f"""Create a comprehensive answer to the user's question using the vetted results.
 
@@ -643,10 +785,7 @@ class ContentService:
 
                 Synthesize these results into a clear, complete answer. If there were no vetted results, say you couldn't find any relevant information to answer the question.
 
-                Guidance:
-                - Always use valid markdown syntax. Try to use level 1 or level 2 headers for your sections.
-                - Cite your sources using the following format: some text <cit>file name - chunk id</cit>, some more text <cit>file name - chunk id> , etc.
-                - Only cite sources that are actually used in the answer."""
+                {citation_guidance}"""
 
             chat_history = chat_history_manager.get_history(conversation.session_id)
 
