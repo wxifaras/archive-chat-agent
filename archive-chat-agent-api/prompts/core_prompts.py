@@ -116,9 +116,11 @@ SEARCH_PROMPT = """
 
 AGENTIC_RETRIEVAL_PROMPT = """
 A content retrieval agent that can answer questions about content that has been archived from JSON documents and associated attachements such as PDFs, Word documents, and PowerPoints. JSON documents will have a provenance field that contains metadata about
-the document, including the source type (e.g., PDF, Word, PowerPoint, etc.), which will need to be used for any questions related to the provenance of a document. If you do not have the answer, respond with "I don't know" and do not attempt to answer the question.
+the document, including the source type (e.g., PDF, Word, PowerPoint, etc.), which will need to be used for any questions related to the provenance of a document.
+Sources have a file_name which must be cited in the answer using the format [file_name].
+ If you do not have the answer, respond with "I don't know" and do not attempt to answer the question.
 """
-
+#Sources have a file_name and a list of numbers in page_number such as page_numer [1,2] which must be cited in the answer using the format [file_name] [page_numbers: x, y].
 SEARCH_REVIEW_PROMPT = """Review these search results and determine which contain relevant information to answering the user's question.
         
    Your input will contain the following information:

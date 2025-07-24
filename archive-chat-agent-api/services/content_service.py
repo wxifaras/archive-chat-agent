@@ -340,9 +340,9 @@ class ContentService:
             
             # Review results
             if conversation.use_agentic_retrieval:
-                await self.review_agentic_retrieval_search_results(conversation, search_results)
+                await self.review_agentic_retrieval_search_results(conversation)
             else:
-                await self.review_search_results(conversation, search_results)
+                await self.review_search_results(conversation)
 
         # Generate final answer by synthesizing vetted results
         final_answer = await self.generate_final_answer(conversation)
@@ -454,7 +454,7 @@ class ContentService:
             logger.error(f"Search execution failed for query '{query}': {str(e)}")
             return []  # Return empty results to continue workflow
 
-    async def review_search_results(self, conversation: ContentConversation, search_results: List[SearchResult]):
+    async def review_search_results(self, conversation: ContentConversation):
         """
         Review search results and determine which are valid/invalid for answering the user's question.
         Uses Azure OpenAI to analyze relevance and make decisions about continuing or finalizing.
@@ -556,7 +556,7 @@ class ContentService:
         except Exception as e:
             logger.error(f"Search results review failed: {str(e)}")
 
-    async def review_agentic_retrieval_search_results(self, conversation: ContentConversation, search_results: List[SearchResult]):
+    async def review_agentic_retrieval_search_results(self, conversation: ContentConversation):
         """
         Review search results and determine which are valid/invalid for answering the user's question.
         Uses Azure OpenAI to analyze relevance and make decisions about continuing or finalizing.
@@ -630,15 +630,15 @@ class ContentService:
                     result = conversation.current_results[idx]
                     conversation.vetted_results.append(result)
                     # For agentic retrieval, we use the content string as the ID since there's no chunk_id
-                    conversation.processed_ids.add(result)
+                    conversation.processed_ids.add(result["chunk_content"])
             
             # add all invalid results from this review to the discarded results list of the overall conversation
             for idx in review_decision.invalid_results:
                 if idx < len(conversation.current_results):
                     result = conversation.current_results[idx]
                     conversation.discarded_results.append(result)
-                    # For agentic retrieval, we use the content string as the ID since there's no chunk_id
-                    conversation.processed_ids.add(result)
+                    # For agentic retrieval, we use the content chunk as the ID since there's no chunk_id
+                    conversation.processed_ids.add(result["chunk_content"])
             
             # resest the current results to empty for the next search
             conversation.current_results = []
@@ -685,8 +685,9 @@ class ContentService:
             result_section = [
                 f"\nResult #{i}",
                 "=" * 80,
+                f"File Name: {result.get('file_name', 'Unknown')}",
                 "\n--- Content ---",
-                result,
+                result.get('chunk_content', 'No content available'),
                 "--- End Content ---"
             ]
 
@@ -727,9 +728,10 @@ class ContentService:
                     result_parts = [
                         f"\nResult #{i}",
                         "=" * 80,
+                        f"File Name: {result.get('file_name', 'Unknown')}",
                         "\n<Start Content>",
                         "-" * 80,
-                        result,  # result is already a string for agentic retrieval
+                        result.get('chunk_content'),
                         "-" * 80,
                         "<End Content>"
                     ]
@@ -768,7 +770,7 @@ class ContentService:
             if conversation.use_agentic_retrieval:
                 citation_guidance = """Guidance:
                 - Always use valid markdown syntax. Try to use level 1 or level 2 headers for your sections.
-                - Cite your sources using the following format: some text <cit>Chunk #0</cit>, some more text <cit>Chunk #1</cit>, etc.
+                - Cite your sources using the following format: some text <cit>file name</cit>, some more text <cit>file name</cit>, etc.
                 - Only cite sources that are actually used in the answer."""
             else:
                 citation_guidance = """Guidance:

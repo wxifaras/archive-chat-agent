@@ -58,7 +58,7 @@ ch.setFormatter(formatter)
 # Add handler
 logger.addHandler(ch)
 
-# Type Definitions
+# SearchResult for traditional search
 class SearchResult(TypedDict):
     chunk_id: str
     chunk_content: str
@@ -66,6 +66,11 @@ class SearchResult(TypedDict):
     source_pages: int
     provenance: str
     reranker_score: float
+
+# SearchResult for agentic retrieval
+class AgenticRetrievalResult(TypedDict):
+    chunk_content: str
+    file_name: str
 
 class AzureAISearchService:
     def __init__(self): 
@@ -237,7 +242,7 @@ class AzureAISearchService:
             SearchableField(name="Provenance", type=SearchFieldDataType.String, searchable=True, retrievable=True),
             SimpleField(name="Provenance_Source", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="chunk_id", type=SearchFieldDataType.String, filterable=True, key=True),
-            SimpleField(name="file_name", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="file_name", type=SearchFieldDataType.String, filterable=True, retrievable=True),
             SimpleField(name="file_type", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="page_number", type=SearchFieldDataType.Collection(SearchFieldDataType.Int32),
             filterable=False,
@@ -273,7 +278,7 @@ class AzureAISearchService:
                     SemanticField(field_name="chunk_content"),
                     SemanticField(field_name="Provenance")
                 ],
-                title_field=SemanticField(field_name="projectId")
+                title_field=SemanticField(field_name="chunk_id")
             )
         )
         
@@ -424,7 +429,7 @@ class AzureAISearchService:
             search_query: str,
             #processed_ids: Set[str],
             #provenance_filter: str | None = None,
-        ) -> tuple[List[str], List[dict]]:
+        ) -> tuple[List[AgenticRetrievalResult], List[dict]]:
         """
         Perform a search using Azure Search's Agentic Retrieval feature
         """
@@ -456,32 +461,39 @@ class AzureAISearchService:
                 raise RuntimeError(f"Run failed: {run.last_error}")
             
             # these are all of the chunks it returned
-            # this is the synthesized result
+            # this is the synthesized result which will include citations based on the prompt (AGENTIC_RETRIEVAL_PROMPT)
             output = self.project_client.agents.messages.get_last_message_text_by_role(thread_id=self.thread.id, role="assistant").text.value
 
             formatted_output = output.replace('.', '\n')
             logger.info(f"Agent response: {formatted_output}")
             
             retrieval_result = self.retrieval_results.get(message.id)
-            #print("Retrieval activity")
-            #print(json.dumps([activity.as_dict() for activity in retrieval_result.activity], indent=2))
-            #print("Retrieval results")
-            #print(json.dumps([reference.as_dict() for reference in retrieval_result.references], indent=2))
 
-            # Extract content from the agentic retrieval response
+            # Retrieval results will return data in the format: [{"type": "AzureSearchDoc", "id":"0", "activity_source": 1, "doc_key": "<key>"}] where the doc_key is whatever you set as the key in the search index
+            # These fields will be based on the what is set for content_fields in the semantic_config = SemanticConfiguration(..) configuration above
+            print("Retrieval results")
+            print(json.dumps([reference.as_dict() for reference in retrieval_result.references], indent=2))
+            
+
+            # Extract content from the agentic retrieval response. This will get data in the format of [{"ref_id":0, "title":"580","content":"<chunk content>"}]. The title
+            # maps to the title_field you set in the semantic config
             agentic_retrieval_text = retrieval_result.response[0].content[0].text
             response_data = json.loads(agentic_retrieval_text)
-            
-            # Extract just the content fields
-            content_list = []
+
+            # Build AgenticRetrievalResult objects from the response data
+            search_results = []
             for item in response_data:
-                if isinstance(item, dict) and 'content' in item:
-                    content_list.append(item['content'])
+                if isinstance(item, dict):
+                    search_result: AgenticRetrievalResult = {
+                        "chunk_content": item.get("content", ""),
+                        "file_name": item.get("title", "")
+                    }
+                    search_results.append(search_result)
             
             # Extract activity data for sub-queries
             activity_data = [activity.as_dict() for activity in retrieval_result.activity]
             
-            return content_list, activity_data
+            return search_results, activity_data
             
         except Exception as e:
             logger.error(f"Error in agentic retrieval: {e}")
