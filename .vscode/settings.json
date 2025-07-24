@@ -1,6 +1,0 @@
-{
-    "python.defaultInterpreterPath": "./archive-chat-agent-api/.venv/Scripts/python.exe",
-    "python.terminal.activateEnvironment": true,
-    "python.envFile": "${workspaceFolder}/archive-chat-agent-api/.env",
-    "python-envs.pythonProjects": []
-}
