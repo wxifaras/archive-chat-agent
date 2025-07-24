@@ -470,12 +470,11 @@ class AzureAISearchService:
             retrieval_result = self.retrieval_results.get(message.id)
 
             # Retrieval results will return data in the format: [{"type": "AzureSearchDoc", "id":"0", "activity_source": 1, "doc_key": "<key>"}] where the doc_key is whatever you set as the key in the search index
-            # These fields will be based on the what is set for content_fields in the semantic_config = SemanticConfiguration(..) configuration above
             print("Retrieval results")
             print(json.dumps([reference.as_dict() for reference in retrieval_result.references], indent=2))
             
 
-            # Extract content from the agentic retrieval response. This will get data in the format of [{"ref_id":0, "title":"580","content":"<chunk content>"}]. The title
+            # Extract content from the agentic retrieval response. This will get data in the format of [{"ref_id":0, "title":"<title_field>","content":"<chunk content>"}]. The title
             # maps to the title_field you set in the semantic config
             agentic_retrieval_text = retrieval_result.response[0].content[0].text
             response_data = json.loads(agentic_retrieval_text)
