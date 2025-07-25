@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Optional logging settings
     LOG_LEVEL: str = "INFO"
 
+    # Use semantic chunking (bool)
+    USE_SEMANTIC_CHUNKING: bool = Field(default=False, description="Enable semantic chunking")
+
     model_config = SettingsConfigDict(
         env_file=".env", 
         case_sensitive=True

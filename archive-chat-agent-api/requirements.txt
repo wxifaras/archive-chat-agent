@@ -10,3 +10,5 @@ tiktoken
 azure-search-documents
 azure-cosmos
 azure-identity
+langchain-experimental
+langchain-openai
