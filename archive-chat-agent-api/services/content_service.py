@@ -2,6 +2,7 @@ import logging
 import os
 from typing import List
 import uuid
+from openai import api_key
 import tiktoken
 import time
 from fastapi import UploadFile
@@ -14,6 +15,8 @@ from services.azure_openai_service import AzureOpenAIService
 from models.content_conversation import ContentConversation, ConversationResult, ReviewDecision, SearchPromptResponse
 from models.chat_history import ChatMessage, Role
 from services.in_memory_chat_history_manager import InMemoryChatHistoryManager
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_openai.embeddings import AzureOpenAIEmbeddings
 
 azure_search_service = AzureAISearchService()
 azure_doc_intell_service = AzureDocIntelService()
@@ -97,152 +100,124 @@ class ContentService:
         if not json_files:
             logger.warning(f"No JSON files found in folder {folder_name}, skipping...")
             return
-        
         if len(json_files) > 1:
             logger.warning(f"Multiple JSON files found in folder {folder_name}, skipping...")
             return
-        
         # Get the JSON file (taking the first one if multiple exist)
         json_file = json_files[0]
-        
         logger.info(f"Processing folder {folder_name} with JSON: {json_file['file_name']} and {len(attachment_files)} attachments")
-        
         document_id = str(uuid.uuid4())
-
         try:
             # Download JSON content
             json_content = await azure_storage_service.get_blob(json_file['blob_path'])
             json_str = json_content if isinstance(json_content, str) else json_content.decode('utf-8')
-            
             # Parse the JSON to get email item for processing
             email_list = EmailList.model_validate_json(json_str)
             email_item = email_list.root[0]
-
             await azure_search_service.create_index()
-            
             if len(attachment_files) == 0:
                 provenance_source = await azure_openai_service.get_source_from_provenance(email_item.Provenance)
                 email_item.Provenance_Source = provenance_source
-
             if len(email_item.text) == 0:
                 email_item.text = "No text content."
-
-            jsonText = self.chunk_json_text(email_item.text)       
-
+            # Choose chunking method from settings
+            use_semantic_chunking = bool(settings.USE_SEMANTIC_CHUNKING)
+            if use_semantic_chunking:
+                jsonText = self.chunk_semantic_text(email_item.text)
+            else:
+                jsonText = self.chunk_json_text(email_item.text)
             await azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file['file_name'], file_type="json")
-
             # process all attachment files
             for attachment_file in attachment_files:
                 try:
-                    # Use original filename for file extension and indexing
                     root, ext = os.path.splitext(attachment_file['file_name'])
-                    
                     email_item.Provenance_Source = ext[1:]
-
                     sas_url = azure_storage_service.generate_blob_sas_url(attachment_file['blob_path'])
-
-                    # Encode the SAS URL to handle special characters                    
                     sas_url = self.encode_sas_url(sas_url)
-
                     time.sleep(5)
-
                     allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
-                    attachmentChunks = self.chunk_text(allExtractedContent)
-
+                    if use_semantic_chunking:
+                        attachmentChunks = self.chunk_semantic_text(allExtractedContent.text)
+                    else:
+                        attachmentChunks = self.chunk_text(allExtractedContent)
                     logger.info(f"Indexing attachment {attachment_file['file_name']} with {len(attachmentChunks)} chunks")
-
                     await azure_search_service.index_content(
-                        attachmentChunks, 
-                        document_id, 
-                        email_item, 
-                        file_name=attachment_file['file_name'],  # Use original filename for indexing
+                        attachmentChunks,
+                        document_id,
+                        email_item,
+                        file_name=attachment_file['file_name'],
                         file_type=ext[1:],
-                        page_number = [chunk['pages'] for chunk in attachmentChunks]
+                        page_number=[chunk.get('pages', []) for chunk in attachmentChunks]
                     )
-
                 except Exception as e:
                     logger.error(f"Error downloading attachment {attachment_file['blob_path']}: {e}")
                     continue
-            
-            # Process the content using existing logic
             logger.info(f"Successfully processed folder {folder_name}")
-            
         except Exception as e:
             logger.error(f"Error processing folder {folder_name}: {e}")
 
     async def process_content(
-            self, 
-            document_id: str,
-            json_file_name: str,
-            json_content: str,
-            attachments: List[UploadFile]):
-        
-            try: 
-                email_list = EmailList.model_validate_json(json_content)
-                email_item = email_list.root[0]
-                index = await azure_search_service.create_index()
-
-                if len(attachments) == 0:
-                    provenance_source = await azure_openai_service.get_source_from_provenance(email_item.Provenance)
-                    email_item.Provenance_Source = provenance_source
-
-                # Chunking and indexing the text field of the json document
-                # Chunking text field by token count
+        self,
+        document_id: str,
+        json_file_name: str,
+        json_content: str,
+        attachments: List[UploadFile]
+    ):
+        try:
+            email_list = EmailList.model_validate_json(json_content)
+            email_item = email_list.root[0]
+            index = await azure_search_service.create_index()
+            if len(attachments) == 0:
+                provenance_source = await azure_openai_service.get_source_from_provenance(email_item.Provenance)
+                email_item.Provenance_Source = provenance_source
+            use_semantic_chunking = bool(settings.USE_SEMANTIC_CHUNKING)
+            blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
+                str(email_item.projectId),
+                json_content,
+                json_file_name
+            )
+            if not uploaded:
+                logger.warning(f"File {json_file_name} already exists in Azure Storage. Skipping JSON upload.")
+            else:
+                if len(email_item.text) == 0:
+                    email_item.text = "No text content."
+                if use_semantic_chunking:
+                    jsonText = self.chunk_semantic_text(email_item.text)
+                else:
+                    jsonText = self.chunk_json_text(email_item.text)
+                await azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type="json")
+            # Extract text from attachments using Azure Doc Intell and chunk them by page
+            attachmentChunks = []
+            for attachment in attachments:
+                file_content = await attachment.read()
                 blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
                     str(email_item.projectId),
-                    json_content,
-                    json_file_name
+                    file_content,
+                    attachment.filename
                 )
-
                 if not uploaded:
-                    logger.warning(f"File {json_file_name} already exists in Azure Storage. Skipping JSON upload.")
-                else:   
-                    if len(email_item.text)==0:
-                        email_item.text = "No text content."
-
-                    jsonText = self.chunk_json_text(email_item.text)       
-                    await azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type="json")
-
-                # Extract text from attachments using Azure Doc Intell and chunk them by page
-                attachmentChunks = []
-                for attachment in attachments:
-                    file_content = await attachment.read()
-                    
-                    blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
-                        str(email_item.projectId),
-                        file_content,
-                        attachment.filename
-                    )
-                    
-                    if not uploaded:
-                        logger.warning(f"File {attachment.filename} already exists in Azure Storage. Skipping Attachment upload.")
-                        continue
-
-                    sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
-
-                    # Encode the SAS URL to handle special characters                    
-                    sas_url = self.encode_sas_url(sas_url)
-                    
-                    time.sleep(5)
-
-                    # Use original filename for file extension and indexing
-                    root, ext = os.path.splitext(attachment.filename)
-                    
-                    email_item.Provenance_Source = ext[1:]
-                    allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
-                    attachmentChunks= self.chunk_text(allExtractedContent)
-
-                    await azure_search_service.index_content(
-                        attachmentChunks, 
-                        document_id, 
-                        email_item, 
-                        file_name=attachment.filename,  # Use original filename for indexing
-                        file_type=ext[1:],
-                        page_number= [chunk['pages'] for chunk in attachmentChunks]
-                    )
-
-            except Exception as e:
-                logger.error(f"Error processing content: {str(e)}")
+                    logger.warning(f"File {attachment.filename} already exists in Azure Storage. Skipping Attachment upload.")
+                    continue
+                sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
+                sas_url = self.encode_sas_url(sas_url)
+                time.sleep(5)
+                root, ext = os.path.splitext(attachment.filename)
+                email_item.Provenance_Source = ext[1:]
+                allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
+                if use_semantic_chunking:
+                    attachmentChunks = self.chunk_semantic_text(allExtractedContent.content)
+                else:
+                    attachmentChunks = self.chunk_text(allExtractedContent)
+                await azure_search_service.index_content(
+                    attachmentChunks,
+                    document_id,
+                    email_item,
+                    file_name=attachment.filename,
+                    file_type=ext[1:],
+                    page_number=[chunk.get('pages', []) for chunk in attachmentChunks]
+                )
+        except Exception as e:
+            logger.error(f"Error processing content: {str(e)}")
 
     def encode_sas_url(self, sas_url: str) -> str:
         # URL encode the blob name part if it contains special characters
@@ -664,6 +639,39 @@ class ContentService:
         except Exception as e:
             logger.error(f"Final answer generation failed: {str(e)}")
             return f"I encountered an error generating the final answer. Error: {str(e)}. Please try rephrasing your question."
+
+    @staticmethod
+    def chunk_semantic_text(text, breakpoint_threshold_type="percentile", breakpoint_threshold_amount=95.0, min_chunk_size=1):
+        """
+        This is still experimental. Semantic chunking using LangChain's SemanticChunker with explicit Azure OpenAI credentials.
+        """
+        try:
+            embeddings = AzureOpenAIEmbeddings(
+                api_key=settings.AZURE_OPENAI_API_KEY,
+                deployment=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
+                model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
+                azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,  
+            )
+            text_splitter = SemanticChunker(
+                embeddings,
+                breakpoint_threshold_type=breakpoint_threshold_type,
+                breakpoint_threshold_amount=breakpoint_threshold_amount,
+                min_chunk_size=min_chunk_size
+            )
+            docs = text_splitter.create_documents([text])
+            
+            chunks = []
+            for i, doc in enumerate(docs):
+                chunks.append({
+                    'chunked_text': doc.page_content,
+                })
+            return chunks
+        
+        except Exception as e:
+            import traceback
+            print("Semantic chunking failed:", e)
+            traceback.print_exc()
+            return []
 
     @staticmethod
     def chunk_text(allContent):
