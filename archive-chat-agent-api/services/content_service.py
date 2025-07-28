@@ -657,12 +657,14 @@ class ContentService:
                 model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
                 azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,  
             )
+
             text_splitter = SemanticChunker(
                 embeddings,
                 breakpoint_threshold_type=breakpoint_threshold_type,
                 breakpoint_threshold_amount=breakpoint_threshold_amount,
                 min_chunk_size=min_chunk_size
             )
+            
             docs = text_splitter.create_documents([text])
             
             chunks = []
