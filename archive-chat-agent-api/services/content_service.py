@@ -111,21 +111,26 @@ class ContentService:
             # Download JSON content
             json_content = await azure_storage_service.get_blob(json_file['blob_path'])
             json_str = json_content if isinstance(json_content, str) else json_content.decode('utf-8')
+            
             # Parse the JSON to get email item for processing
             email_list = EmailList.model_validate_json(json_str)
             email_item = email_list.root[0]
             await azure_search_service.create_index()
+
             if len(attachment_files) == 0:
                 provenance_source = await azure_openai_service.get_source_from_provenance(email_item.Provenance)
                 email_item.Provenance_Source = provenance_source
             if len(email_item.text) == 0:
                 email_item.text = "No text content."
+
             # Choose chunking method from settings
             use_semantic_chunking = bool(settings.USE_SEMANTIC_CHUNKING)
+            
             if use_semantic_chunking:
                 jsonText = self.chunk_semantic_text(email_item.text)
             else:
                 jsonText = self.chunk_json_text(email_item.text)
+
             await azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file['file_name'], file_type="json")
             # process all attachment files
             for attachment_file in attachment_files:
