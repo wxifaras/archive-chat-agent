@@ -136,10 +136,12 @@ class ContentService:
                 try:
                     root, ext = os.path.splitext(attachment_file['file_name'])
                     email_item.Provenance_Source = ext[1:]
-                    sas_url = azure_storage_service.generate_blob_sas_url(attachment_file['blob_path'])
-                    sas_url = self.encode_sas_url(sas_url)
+                    original_sas_url = azure_storage_service.generate_blob_sas_url(attachment_file['blob_path'])
+                    logger.info(f"Original SAS URL: {original_sas_url}")
+                    encoded_sas_url = self.encode_sas_url(original_sas_url)
+                    logger.info(f"Encoded SAS URL: {encoded_sas_url}")
                     time.sleep(5)
-                    allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
+                    allExtractedContent = await azure_doc_intell_service.extract_content(encoded_sas_url)
                     if use_semantic_chunking:
                         attachmentChunks = self.chunk_semantic_text(allExtractedContent.text)
                     else:
@@ -154,7 +156,7 @@ class ContentService:
                         page_number=[chunk.get('pages', []) for chunk in attachmentChunks]
                     )
                 except Exception as e:
-                    logger.error(f"Error downloading attachment {attachment_file['blob_path']}: {e}")
+                    logger.error(f"Error downloading attachment {attachment_file['blob_path']} with SAS URL {encoded_sas_url}: {e}")
                     continue
             logger.info(f"Successfully processed folder {folder_name}")
         except Exception as e:
@@ -226,33 +228,88 @@ class ContentService:
             logger.error(f"Error processing content: {str(e)}")
 
     def encode_sas_url(self, sas_url: str) -> str:
-        # URL encode the blob name part if it contains special characters
-        from urllib.parse import quote
-        import re
+        """
+        Properly URL encode Azure blob SAS URLs, handling mixed encoding scenarios.
+        Some blob names may be partially encoded (spaces as %20) but missing encoding for # characters.
+        """
+        from urllib.parse import quote, unquote, urlparse, urlunparse
         
-        # Get the set of unsafe characters
-        unsafe_chars = re.compile(r'[^A-Za-z0-9\-_.()]')
-        
-        if unsafe_chars.search(sas_url):
-            # Split the URL to isolate the blob name from the query parameters
-            if '?' in sas_url:
-                base_url, query_params = sas_url.split('?', 1)
+        try:
+            logger.info(f"Starting URL encoding for: {sas_url}")
+            
+            # Check if URL contains unencoded # character (major issue for Azure Document Intelligence)
+            if '#' in sas_url and '?' in sas_url:
+                # Split at the query string to avoid processing the SAS token
+                base_url_part = sas_url.split('?')[0]
+                if '#' in base_url_part:
+                    logger.warning(f"Found unencoded # character in URL path: {base_url_part}")
+            
+            # Parse the URL to separate components
+            parsed = urlparse(sas_url)
+            logger.debug(f"Parsed URL - scheme: {parsed.scheme}, netloc: {parsed.netloc}, path: {parsed.path}")
+            
+            # Split the path into segments (skip empty first element from leading /)
+            path_segments = [segment for segment in parsed.path.split('/') if segment]
+            logger.debug(f"Path segments: {path_segments}")
+            
+            # Process each path segment to handle mixed encoding
+            encoded_segments = []
+            for i, segment in enumerate(path_segments):
+                logger.debug(f"Processing segment {i}: '{segment}'")
+                
+                # First, decode any existing URL encoding to get the raw text
+                # This handles cases where spaces are already encoded as %20
+                decoded_segment = unquote(segment)
+                logger.debug(f"  After unquote: '{decoded_segment}'")
+                
+                # Then re-encode the entire segment properly
+                # This ensures all special characters including # are encoded
+                encoded_segment = quote(decoded_segment, safe='-_.')
+                logger.debug(f"  After quote: '{encoded_segment}'")
+                
+                encoded_segments.append(encoded_segment)
+                
+                # Log segment transformations for debugging
+                if segment != encoded_segment:
+                    logger.info(f"Segment encoding: '{segment}' -> '{decoded_segment}' -> '{encoded_segment}'")
+            
+            # Reconstruct the path
+            encoded_path = '/' + '/'.join(encoded_segments) if encoded_segments else parsed.path
+            logger.debug(f"Reconstructed path: {encoded_path}")
+            
+            # Reconstruct the URL with the encoded path
+            encoded_url = urlunparse((
+                parsed.scheme,
+                parsed.netloc, 
+                encoded_path,
+                parsed.params,
+                parsed.query,  # Query parameters (SAS token) should not be re-encoded
+                parsed.fragment
+            ))
+            
+            # Final validation - ensure no unencoded # in the path portion
+            if '#' in encoded_url and '?' in encoded_url:
+                path_portion = encoded_url.split('?')[0]
+                if '#' in path_portion:
+                    logger.error(f"CRITICAL: Still found unencoded # in final URL path: {path_portion}")
+                    # Force encode any remaining # characters in the path
+                    fixed_path = path_portion.replace('#', '%23')
+                    encoded_url = encoded_url.replace(path_portion, fixed_path)
+                    logger.info(f"Applied emergency # encoding fix: {encoded_url}")
+            
+            # Log the transformation for debugging
+            if encoded_url != sas_url:
+                logger.info(f"URL encoding applied:")
+                logger.info(f"  Original: {sas_url}")
+                logger.info(f"  Encoded:  {encoded_url}")
             else:
-                base_url, query_params = sas_url, ''
+                logger.info("No URL encoding changes needed")
             
-            # Extract blob name from the URL path (last part after the last /)
-            url_parts = base_url.split('/')
-            if len(url_parts) > 0:
-                blob_name = url_parts[-1]
-                # URL encode the blob name with safe characters for Azure blob names
-                encoded_blob_name = quote(blob_name, safe='')
-                url_parts[-1] = encoded_blob_name
-                base_url = '/'.join(url_parts)
+            return encoded_url
             
-            # Reconstruct the URL
-            sas_url = f"{base_url}?{query_params}" if query_params else base_url
-        
-        return sas_url
+        except Exception as e:
+            logger.error(f"Error encoding SAS URL: {e}. Using original URL: {sas_url}")
+            return sas_url
 
     async def chat_with_content(self, message: str, user_id: str, session_id: str):
         """
