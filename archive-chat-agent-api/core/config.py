@@ -1,6 +1,6 @@
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional
 from functools import lru_cache
 
 class Settings(BaseSettings):
@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     COSMOS_CONTAINER_NAME: str
     COSMOS_ENDPOINT: str
     USE_IN_MEMORY_CHAT_HISTORY: bool = False
+    USE_SEMANTIC_CHUNKING: bool = False
+    WATCHFILES_IGNORE_PATHS: Optional[str] = None
     
     # Evaluation settings
     EVALUATION_MAX_CONCURRENT: int = Field(default=5, description="Maximum concurrent evaluations for parallel processing")

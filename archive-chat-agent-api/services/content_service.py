@@ -2,7 +2,6 @@ import logging
 import os
 from typing import List
 import uuid
-from openai import api_key
 import tiktoken
 import time
 from fastapi import UploadFile
@@ -209,10 +208,12 @@ class ContentService:
                 root, ext = os.path.splitext(attachment.filename)
                 email_item.Provenance_Source = ext[1:]
                 allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
+
                 if use_semantic_chunking:
                     attachmentChunks = self.chunk_semantic_text(allExtractedContent.content)
                 else:
                     attachmentChunks = self.chunk_text(allExtractedContent)
+                    
                 await azure_search_service.index_content(
                     attachmentChunks,
                     document_id,
@@ -646,11 +647,14 @@ class ContentService:
             return f"I encountered an error generating the final answer. Error: {str(e)}. Please try rephrasing your question."
 
     @staticmethod
-    def chunk_semantic_text(text, breakpoint_threshold_type="percentile", breakpoint_threshold_amount=95.0, min_chunk_size=1):
+    def chunk_semantic_text(text, breakpoint_threshold_type="percentile", breakpoint_threshold_amount=80.0, min_chunk_size=100):
         """
-        This is still experimental. Semantic chunking using LangChain's SemanticChunker with explicit Azure OpenAI credentials.
+        Semantic chunking using LangChain's SemanticChunker with explicit Azure OpenAI credentials.
         """
         try:
+            if not text or not text.strip():
+                return []
+                
             embeddings = AzureOpenAIEmbeddings(
                 api_key=settings.AZURE_OPENAI_API_KEY,
                 deployment=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
@@ -668,17 +672,40 @@ class ContentService:
             docs = text_splitter.create_documents([text])
             
             chunks = []
+            seen_content = set()  # Track seen content to prevent duplicates
+            
             for i, doc in enumerate(docs):
+                chunk_text = doc.page_content.strip()
+                
+                # Skip empty chunks
+                if not chunk_text:
+                    continue
+                    
+                # Create a hash of the content to check for duplicates
+                content_hash = hash(chunk_text.lower())
+                if content_hash in seen_content:
+                    logger.warning(f"Skipping duplicate semantic chunk: {chunk_text[:100]}...")
+                    continue
+                    
+                seen_content.add(content_hash)
+                
                 chunks.append({
-                    'chunked_text': doc.page_content,
+                    'chunked_text': chunk_text,
+                    'chunk_index': i,
+                    'chunk_size': len(chunk_text),
+                    'chunk_method': 'semantic'
                 })
+                
+            logger.info(f"Created {len(chunks)} semantic chunks from text of length {len(text)}")
             return chunks
-        
+            
         except Exception as e:
             import traceback
-            print("Semantic chunking failed:", e)
+            logger.error(f"Semantic chunking failed: {e}")
             traceback.print_exc()
-            return []
+            # Fallback to token-based chunking
+            logger.info("Falling back to token-based chunking")
+            return ContentService.chunk_json_text(text)
 
     @staticmethod
     def chunk_text(allContent):
