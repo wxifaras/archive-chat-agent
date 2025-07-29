@@ -47,6 +47,14 @@ SEARCH_PROMPT = """
     3. Generate a hypothetical paragraph or few sentences of what we are looking for in the documents
     4. Generate an appropriate OData filter if the question is asking for a specific document type
 
+    CRITICAL FOR SUBSEQUENT SEARCHES:
+    If this is NOT the first search attempt, you MUST diversify your search strategy:
+    - Use different terminology, synonyms, or technical vs. layman terms
+    - Focus on different aspects, time periods, or perspectives of the topic  
+    - Explore related concepts, causes, effects, or stakeholder viewpoints
+    - Example: If first search used "tariff policy developments", try "trade restrictions economic impact" or "import duty business reactions"
+    - Look for gaps in previously found content and target those specifically
+
     ###Output Format###
 
     search_query: The generated search text
@@ -134,10 +142,19 @@ SEARCH_REVIEW_PROMPT = """Review these search results and determine which contai
    If a chunk contains any amount of useful information related to the user's query, consider it valid. Only discard chunks that will not help constructing the final answer.
    DO NOT discard chunks that contain partially useful information. We are trying to construct detailed responses, so more detail is better. We are not aiming for conciseness.
 
+   CRITICAL - Multiple Search Attempt Analysis:
+   If this is a subsequent search attempt (you see "Previous Attempts" above), be MORE SELECTIVE:
+   - Compare current results against previously vetted results - mark as INVALID if content is redundant or too similar
+   - Look for truly NEW information, different perspectives, or additional details not already covered
+   - If current results feel like "more of the same" from previous attempts, be stricter about marking them invalid
+   - Remember: we already found good content in previous attempts, so subsequent results need to add significant value
+   - Don't mark everything as valid just because it's topically related - we need NEW insights or different angles
+
    For Specific Questions:
    If the user asks a very specific question, such as for an FTE count, only consider chunks that contain information that is specifically related to that question. Discard other chunks.
 
    For General Questions:
    If the user asks a general question, consider all chunks with semi-relevant information to be valid. Our goal is to compile a comprehensive answer to the user's question.
    Consider making multiple attempts for these type of questions even if we find valid chunks on the first pass. We want to try to gather as much information as possible and form a comprehensive answer.
+   However, on subsequent attempts, prioritize truly additional information over repetitive content.
    """
