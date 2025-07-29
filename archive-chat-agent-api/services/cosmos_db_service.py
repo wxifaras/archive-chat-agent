@@ -23,6 +23,7 @@ class CosmosDBService:
         if self.client:
             await self.client.close()
             self.client = None
+
         if self.credential:
             await self.credential.close()
 
@@ -37,6 +38,7 @@ class CosmosDBService:
             partition_key=partition_key,
             **kwargs
         )
+        
         results = []
         async for item in items_iter:
             results.append(item)
