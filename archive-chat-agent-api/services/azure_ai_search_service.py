@@ -50,8 +50,10 @@ class SearchResult(TypedDict):
     chunk_id: str
     chunk_content: str
     file_name: str
+    sas_url: str
     source_pages: int
     provenance: str
+    crawledLink: str
     reranker_score: float
 
 class AzureAISearchService:
