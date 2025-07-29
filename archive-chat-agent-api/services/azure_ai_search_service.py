@@ -21,6 +21,7 @@ from azure.search.documents.indexes.models import (
     SearchIndex
 )
 import logging
+from services.azure_storage_service import AzureStorageService
 from typing import List, Set, Optional, TypedDict
 from pydantic import BaseModel, Field
 from core.settings import settings
@@ -49,8 +50,10 @@ class SearchResult(TypedDict):
     chunk_id: str
     chunk_content: str
     file_name: str
+    sas_url: str
     source_pages: int
     provenance: str
+    crawledLink: str
     reranker_score: float
 
 class AzureAISearchService:
@@ -65,6 +68,7 @@ class AzureAISearchService:
         self.search_index_client = SearchIndexClient(settings.AZURE_AI_SEARCH_SERVICE_ENDPOINT, AzureKeyCredential(settings.AZURE_AI_SEARCH_SERVICE_KEY))
         self.search_client = SearchClient(settings.AZURE_AI_SEARCH_SERVICE_ENDPOINT, settings.AZURE_AI_SEARCH_INDEX_NAME, AzureKeyCredential(settings.AZURE_AI_SEARCH_SERVICE_KEY))
         self.openai_service = AzureOpenAIService()
+        self.azure_storage_service = AzureStorageService()
 
     async def create_index(self) -> str:
         try:
@@ -113,6 +117,7 @@ class AzureAISearchService:
             filterable=False,
             sortable=False,
             facetable=False),
+            SimpleField(name="blob_path", type=SearchFieldDataType.String, filterable=True),
             SearchableField(name="chunk_content", type=SearchFieldDataType.String, searchable=True, retrievable=True),
             SearchField(
                 name="chunk_content_vector",
@@ -220,7 +225,8 @@ class AzureAISearchService:
                     "chunk_content": chunk['chunked_text'],
                     "chunk_content_vector": embedding,
                     "page_number": page,
-                    "Provenance_Source": str(email_item.Provenance_Source) if email_item.Provenance_Source is not None else None
+                    "Provenance_Source": str(email_item.Provenance_Source) if email_item.Provenance_Source is not None else None,
+                    "blob_path": str(email_item.blob_path) if email_item.blob_path is not None else None
                 })
 
         result = await self.search_client.upload_documents(documents=documents)
@@ -264,7 +270,7 @@ class AzureAISearchService:
             search_text=search_query,
             vector_queries=[vector_query],
             filter=filter_str,
-            select=["chunk_id", "chunk_content", "file_name", "Provenance"],
+            select=["chunk_id", "chunk_content", "file_name", "Provenance", "crawledLink", "blob_path"],
             top=settings.NUM_SEARCH_RESULTS,
             query_type="semantic",
             semantic_configuration_name="semantic-config"
@@ -272,13 +278,22 @@ class AzureAISearchService:
 
         search_results = []
         async for result in results:
+
+            encoded_sas_url = ''
+            if result["blob_path"]:
+                sas_url = self.azure_storage_service.generate_blob_sas_url(result["blob_path"])
+                encoded_sas_url = self.azure_storage_service.encode_sas_url(sas_url)
+
             search_result: SearchResult = {
                 "chunk_id": result["chunk_id"],
                 "chunk_content": result["chunk_content"],
                 "reranker_score": result["@search.reranker_score"],
                 "file_name": result.get("file_name", ""),
+                "sas_url": encoded_sas_url,
                 "provenance": result.get("Provenance", ""),
+                "crawledLink": result.get("crawledLink", "")
             }
+
             search_results.append(search_result)
 
         return search_results

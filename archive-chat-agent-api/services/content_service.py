@@ -99,13 +99,16 @@ class ContentService:
         if not json_files:
             logger.warning(f"No JSON files found in folder {folder_name}, skipping...")
             return
+        
         if len(json_files) > 1:
             logger.warning(f"Multiple JSON files found in folder {folder_name}, skipping...")
             return
+        
         # Get the JSON file (taking the first one if multiple exist)
         json_file = json_files[0]
         logger.info(f"Processing folder {folder_name} with JSON: {json_file['file_name']} and {len(attachment_files)} attachments")
         document_id = str(uuid.uuid4())
+        
         try:
             # Download JSON content
             json_content = await azure_storage_service.get_blob(json_file['blob_path'])
@@ -135,18 +138,24 @@ class ContentService:
             for attachment_file in attachment_files:
                 try:
                     root, ext = os.path.splitext(attachment_file['file_name'])
+                   
                     email_item.Provenance_Source = ext[1:]
                     original_sas_url = azure_storage_service.generate_blob_sas_url(attachment_file['blob_path'])
                     logger.info(f"Original SAS URL: {original_sas_url}")
-                    encoded_sas_url = self.encode_sas_url(original_sas_url)
+                    encoded_sas_url = azure_storage_service.encode_sas_url(original_sas_url)
                     logger.info(f"Encoded SAS URL: {encoded_sas_url}")
+                    email_item.blob_path = attachment_file['blob_path']
+                    
                     time.sleep(5)
+                   
                     allExtractedContent = await azure_doc_intell_service.extract_content(encoded_sas_url)
+
                     if use_semantic_chunking:
                         attachmentChunks = self.chunk_semantic_text(allExtractedContent.text)
                     else:
                         attachmentChunks = self.chunk_text(allExtractedContent)
                     logger.info(f"Indexing attachment {attachment_file['file_name']} with {len(attachmentChunks)} chunks")
+
                     await azure_search_service.index_content(
                         attachmentChunks,
                         document_id,
@@ -173,15 +182,19 @@ class ContentService:
             email_list = EmailList.model_validate_json(json_content)
             email_item = email_list.root[0]
             index = await azure_search_service.create_index()
+
             if len(attachments) == 0:
                 provenance_source = await azure_openai_service.get_source_from_provenance(email_item.Provenance)
                 email_item.Provenance_Source = provenance_source
+
             use_semantic_chunking = bool(settings.USE_SEMANTIC_CHUNKING)
+
             blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
                 str(email_item.projectId),
                 json_content,
                 json_file_name
             )
+
             if not uploaded:
                 logger.warning(f"File {json_file_name} already exists in Azure Storage. Skipping JSON upload.")
             else:
@@ -191,25 +204,33 @@ class ContentService:
                     jsonText = self.chunk_semantic_text(email_item.text)
                 else:
                     jsonText = self.chunk_json_text(email_item.text)
+                
                 await azure_search_service.index_content(jsonText, document_id, email_item, file_name=json_file_name, file_type="json")
+            
             # Extract text from attachments using Azure Doc Intell and chunk them by page
             attachmentChunks = []
             for attachment in attachments:
                 file_content = await attachment.read()
+                
                 blob_path, uploaded = await azure_storage_service.upload_file_with_dup_check(
                     str(email_item.projectId),
                     file_content,
                     attachment.filename
                 )
+
                 if not uploaded:
                     logger.warning(f"File {attachment.filename} already exists in Azure Storage. Skipping Attachment upload.")
                     continue
-                sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
-                sas_url = self.encode_sas_url(sas_url)
+
+                email_item.blob_path = blob_path
+                original_sas_url = azure_storage_service.generate_blob_sas_url(blob_path)
+                encoded_sas_url = azure_storage_service.encode_sas_url(original_sas_url)
+
                 time.sleep(5)
+
                 root, ext = os.path.splitext(attachment.filename)
                 email_item.Provenance_Source = ext[1:]
-                allExtractedContent = await azure_doc_intell_service.extract_content(sas_url)
+                allExtractedContent = await azure_doc_intell_service.extract_content(encoded_sas_url)
 
                 if use_semantic_chunking:
                     attachmentChunks = self.chunk_semantic_text(allExtractedContent.content)
@@ -226,90 +247,6 @@ class ContentService:
                 )
         except Exception as e:
             logger.error(f"Error processing content: {str(e)}")
-
-    def encode_sas_url(self, sas_url: str) -> str:
-        """
-        Properly URL encode Azure blob SAS URLs, handling mixed encoding scenarios.
-        Some blob names may be partially encoded (spaces as %20) but missing encoding for # characters.
-        """
-        from urllib.parse import quote, unquote, urlparse, urlunparse
-        
-        try:
-            logger.info(f"Starting URL encoding for: {sas_url}")
-            
-            # Check if URL contains unencoded # character (major issue for Azure Document Intelligence)
-            if '#' in sas_url and '?' in sas_url:
-                # Split at the query string to avoid processing the SAS token
-                base_url_part = sas_url.split('?')[0]
-                if '#' in base_url_part:
-                    logger.warning(f"Found unencoded # character in URL path: {base_url_part}")
-            
-            # Parse the URL to separate components
-            parsed = urlparse(sas_url)
-            logger.debug(f"Parsed URL - scheme: {parsed.scheme}, netloc: {parsed.netloc}, path: {parsed.path}")
-            
-            # Split the path into segments (skip empty first element from leading /)
-            path_segments = [segment for segment in parsed.path.split('/') if segment]
-            logger.debug(f"Path segments: {path_segments}")
-            
-            # Process each path segment to handle mixed encoding
-            encoded_segments = []
-            for i, segment in enumerate(path_segments):
-                logger.debug(f"Processing segment {i}: '{segment}'")
-                
-                # First, decode any existing URL encoding to get the raw text
-                # This handles cases where spaces are already encoded as %20
-                decoded_segment = unquote(segment)
-                logger.debug(f"  After unquote: '{decoded_segment}'")
-                
-                # Then re-encode the entire segment properly
-                # This ensures all special characters including # are encoded
-                encoded_segment = quote(decoded_segment, safe='-_.')
-                logger.debug(f"  After quote: '{encoded_segment}'")
-                
-                encoded_segments.append(encoded_segment)
-                
-                # Log segment transformations for debugging
-                if segment != encoded_segment:
-                    logger.info(f"Segment encoding: '{segment}' -> '{decoded_segment}' -> '{encoded_segment}'")
-            
-            # Reconstruct the path
-            encoded_path = '/' + '/'.join(encoded_segments) if encoded_segments else parsed.path
-            logger.debug(f"Reconstructed path: {encoded_path}")
-            
-            # Reconstruct the URL with the encoded path
-            encoded_url = urlunparse((
-                parsed.scheme,
-                parsed.netloc, 
-                encoded_path,
-                parsed.params,
-                parsed.query,  # Query parameters (SAS token) should not be re-encoded
-                parsed.fragment
-            ))
-            
-            # Final validation - ensure no unencoded # in the path portion
-            if '#' in encoded_url and '?' in encoded_url:
-                path_portion = encoded_url.split('?')[0]
-                if '#' in path_portion:
-                    logger.error(f"CRITICAL: Still found unencoded # in final URL path: {path_portion}")
-                    # Force encode any remaining # characters in the path
-                    fixed_path = path_portion.replace('#', '%23')
-                    encoded_url = encoded_url.replace(path_portion, fixed_path)
-                    logger.info(f"Applied emergency # encoding fix: {encoded_url}")
-            
-            # Log the transformation for debugging
-            if encoded_url != sas_url:
-                logger.info(f"URL encoding applied:")
-                logger.info(f"  Original: {sas_url}")
-                logger.info(f"  Encoded:  {encoded_url}")
-            else:
-                logger.info("No URL encoding changes needed")
-            
-            return encoded_url
-            
-        except Exception as e:
-            logger.error(f"Error encoding SAS URL: {e}. Using original URL: {sas_url}")
-            return sas_url
 
     async def chat_with_content(self, message: str, user_id: str, session_id: str):
         """

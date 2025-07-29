@@ -28,6 +28,7 @@ class EmailItem(BaseModel):
     Comments: Optional[str] = None
     Timestamp: Optional[str] = None
     Provenance_Source: Optional[str] = None
+    blob_path: Optional[str] = None
 
     model_config = {
         'populate_by_name': True,
