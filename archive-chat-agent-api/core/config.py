@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     COSMOS_ENDPOINT: str
     USE_IN_MEMORY_CHAT_HISTORY: bool = False
     USE_SEMANTIC_CHUNKING: bool = False
-    WATCHFILES_IGNORE_PATHS: Optional[str] = None
+    WATCHFILES_IGNORE_PATHS: Optional[str] = None   
     
     # Evaluation settings
     EVALUATION_MAX_CONCURRENT: int = Field(default=5, description="Maximum concurrent evaluations for parallel processing")
@@ -45,6 +45,8 @@ class Settings(BaseSettings):
 
     # Use semantic chunking (bool)
     USE_SEMANTIC_CHUNKING: bool = Field(default=False, description="Enable semantic chunking")
+    SEMANTIC_CHUNK_BREAKPOINT_THRESHOLD_AMOUNT: float = Field(default=95.0, description="Semantic chunking breakpoint threshold amount")
+    SEMANTIC_CHUNK_MIN_CHUNK_SIZE: int = Field(default=1, description="Semantic chunking minimum chunk size")
 
     model_config = SettingsConfigDict(
         env_file=".env", 
