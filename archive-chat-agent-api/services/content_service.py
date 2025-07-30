@@ -151,9 +151,10 @@ class ContentService:
                     allExtractedContent = await azure_doc_intell_service.extract_content(encoded_sas_url)
 
                     if use_semantic_chunking:
-                        attachmentChunks = self.chunk_semantic_text(allExtractedContent.text)
+                        attachmentChunks = self.chunk_semantic_text(allExtractedContent.content)
                     else:
                         attachmentChunks = self.chunk_text(allExtractedContent)
+                        
                     logger.info(f"Indexing attachment {attachment_file['file_name']} with {len(attachmentChunks)} chunks")
 
                     await azure_search_service.index_content(
