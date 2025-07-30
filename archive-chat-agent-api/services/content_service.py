@@ -369,7 +369,8 @@ class ContentService:
             results = await azure_search_service.run_search(
                 search_query=query,
                 processed_ids=conversation.processed_ids,
-                provenance_filter=filter_str if filter_str else None
+                provenance_filter=filter_str if filter_str else None,
+                reranker_threshold=settings.RERANKER_SCORE_THRESHOLD
             )
 
             conversation.current_results = results

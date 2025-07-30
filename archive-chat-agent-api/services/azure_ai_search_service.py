@@ -245,6 +245,7 @@ class AzureAISearchService:
             search_query: str,
             processed_ids: Set[str],
             provenance_filter: str | None = None,
+            reranker_threshold: float | None = None,
         ) -> List[SearchResult]:
         """
         Perform a search using Azure Cognitive Search with both semantic and vector queries.
@@ -270,6 +271,7 @@ class AzureAISearchService:
             search_text=search_query,
             vector_queries=[vector_query],
             filter=filter_str,
+            #semantic_answer_threshold = reranker_threshold,
             select=["chunk_id", "chunk_content", "file_name", "Provenance", "crawledLink", "blob_path"],
             top=settings.NUM_SEARCH_RESULTS,
             query_type="semantic",
