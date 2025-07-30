@@ -641,58 +641,38 @@ class ContentService:
             return f"I encountered an error generating the final answer. Error: {str(e)}. Please try rephrasing your question."
 
     @staticmethod
-    def chunk_semantic_text(text, breakpoint_threshold_type="percentile", breakpoint_threshold_amount=80.0, min_chunk_size=100):
+    def chunk_semantic_text(text, breakpoint_threshold_type="percentile"):
         """
         Semantic chunking using LangChain's SemanticChunker with explicit Azure OpenAI credentials.
         """
         try:
             if not text or not text.strip():
                 return []
-                
+
+            breakpoint_threshold_amount = settings.SEMANTIC_CHUNK_BREAKPOINT_THRESHOLD_AMOUNT
+            min_chunk_size = settings.SEMANTIC_CHUNK_MIN_CHUNK_SIZE
+
             embeddings = AzureOpenAIEmbeddings(
                 api_key=settings.AZURE_OPENAI_API_KEY,
                 deployment=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
                 model=settings.AZURE_OPENAI_TEXT_EMBEDDING_DEPLOYMENT_NAME,
                 azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,  
             )
-
             text_splitter = SemanticChunker(
                 embeddings,
                 breakpoint_threshold_type=breakpoint_threshold_type,
                 breakpoint_threshold_amount=breakpoint_threshold_amount,
                 min_chunk_size=min_chunk_size
             )
-            
             docs = text_splitter.create_documents([text])
-            
+
             chunks = []
-            seen_content = set()  # Track seen content to prevent duplicates
-            
             for i, doc in enumerate(docs):
-                chunk_text = doc.page_content.strip()
-                
-                # Skip empty chunks
-                if not chunk_text:
-                    continue
-                    
-                # Create a hash of the content to check for duplicates
-                content_hash = hash(chunk_text.lower())
-                if content_hash in seen_content:
-                    logger.warning(f"Skipping duplicate semantic chunk: {chunk_text[:100]}...")
-                    continue
-                    
-                seen_content.add(content_hash)
-                
                 chunks.append({
-                    'chunked_text': chunk_text,
-                    'chunk_index': i,
-                    'chunk_size': len(chunk_text),
-                    'chunk_method': 'semantic'
+                    'chunked_text': doc.page_content,
                 })
-                
-            logger.info(f"Created {len(chunks)} semantic chunks from text of length {len(text)}")
             return chunks
-            
+
         except Exception as e:
             import traceback
             logger.error(f"Semantic chunking failed: {e}")
