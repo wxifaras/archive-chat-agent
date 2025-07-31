@@ -151,7 +151,7 @@ class ContentService:
                     allExtractedContent = await azure_doc_intell_service.extract_content(encoded_sas_url)
 
                     if use_semantic_chunking:
-                        attachmentChunks = self.chunk_semantic_text(allExtractedContent.text)
+                        attachmentChunks = self.chunk_semantic_text(allExtractedContent.content)
                     else:
                         attachmentChunks = self.chunk_text(allExtractedContent)
                     logger.info(f"Indexing attachment {attachment_file['file_name']} with {len(attachmentChunks)} chunks")
@@ -415,22 +415,32 @@ class ContentService:
             # Format search history for context
             search_history_formatted = self.format_search_history_for_review(conversation)
             
-            # Construct the review prompt with all context
-            llm_input = f"""
-                User Question: {conversation.user_query}
+            current_results_count = len(conversation.current_results)
 
-                <Current Search Results to review>
-                {current_results_formatted}
-                <end current search results to review>
+            # Create context about the current search attempt
+            attempt_context = f"\n\nCURRENT SEARCH: Attempt #{conversation.attempts + 1} of {MAX_ATTEMPTS}. Previous attempts found {len(conversation.vetted_results)} valid results."
+            
+            # Create a clear counting instruction
+            counting_instruction = f"""
+                CRITICAL COUNTING REQUIREMENT:
+                - You are reviewing exactly {current_results_count} search results
+                - Results are numbered from #0 to #{current_results_count-1}
+                - You MUST classify every single result number
+                - Your valid_results + invalid_results lists must contain exactly {current_results_count} numbers total
+                - Do not skip any numbers from 0 to {current_results_count-1}"""
+            
+            llm_input = f"""User Question: {conversation.user_query}
+                        {counting_instruction}{attempt_context}
 
-                <previously vetted results, do not review>
-                {vetted_results_formatted}
-                <end previously vetted results, do not review>
+                        Current Search Results:
+                        {current_results_formatted}
 
-                <Previous Attempts>
-                {search_history_formatted}
-                <end Previous Attempts>
-                """
+                        Previously Vetted Results:
+                        {vetted_results_formatted}
+
+                        Previous Attempts:
+                        {search_history_formatted}
+                        """
             
             messages = [
                 {"role": "system", "content": SEARCH_REVIEW_PROMPT},
@@ -441,18 +451,32 @@ class ContentService:
             review_decision = await azure_openai_service.get_chat_response(messages, ReviewDecision)
 
             # Validate indices against actual results count and filter invalid ones
-            current_results_count = len(conversation.current_results)
             valid_indices, invalid_indices = self.validate_and_filter_indices(
                 review_decision, current_results_count
             )
 
-            # Override decision if we found mostly valid results and the LLM chooses to finalize (setting at 80% - there are likely more valid results in the search index)
+            # Smart retry logic - continue if we're finding lots of valid content (suggests more exists)
             final_decision = review_decision.decision
             valid_percentage = len(valid_indices) / current_results_count if current_results_count > 0 else 0
             
-            if (valid_percentage >= 0.8 and final_decision == "finalize"):
-                logger.info(f"Overriding 'finalize' decision: {len(valid_indices)}/{current_results_count} results ({valid_percentage:.1%}) were valid, likely more data available")
+            # More intelligent retry conditions
+            should_override_finalize = False
+            override_reason = ""
+            
+            if final_decision == "finalize" and conversation.attempts < (MAX_ATTEMPTS - 1):
+                # Only override if we have strong signals that more content exists
+                if valid_percentage >= 0.8:
+                    should_override_finalize = True
+                    override_reason = f"High validity rate ({valid_percentage:.1%}) suggests more relevant content available"
+                elif valid_percentage >= 0.6:
+                    should_override_finalize = True
+                    override_reason = f"Good validity ({valid_percentage:.1%}) with {len(valid_indices)} valid results suggests comprehensive search needed"
+            
+            if should_override_finalize:
+                logger.info(f"Overriding 'finalize' decision: {override_reason}")
                 final_decision = "retry"
+            
+            logger.info(f"Pass {conversation.attempts + 1}: {len(valid_indices)}/{current_results_count} valid ({valid_percentage:.1%}), LLM decision: {review_decision.decision}, final: {final_decision}")
 
             conversation.thought_process.append({
                 "step": "review",
@@ -569,6 +593,7 @@ class ContentService:
                 ])
             
             output_parts.extend(result_section)
+            output_parts.append("-" * 80)  # Separator between results
         
         return "\n".join(output_parts)
 

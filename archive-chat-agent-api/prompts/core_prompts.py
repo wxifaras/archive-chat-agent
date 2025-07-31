@@ -128,15 +128,17 @@ SEARCH_REVIEW_PROMPT = """Review these search results and determine which contai
    Your input will contain the following information:
       
    1. User Question: The question the user asked
-   2. Current Search Results: The results of the current search
-   3. Previously Vetted Results: The results we've already vetted
-   4. Previous Attempts: The previous search queries and filters
+   2. Current Search Results: The results of the current search (numbered 0-N)
+   3. Previously Vetted Results: The results we've already approved in previous attempts
+   4. Previous Attempts: The previous search queries, filters, and review analyses
 
    Respond with:
    1. thought_process: Your analysis of the results. Is this a general or specific question? Which chunks are relevant and which are not? Only consider a result relevant if it contains information that partially or fully answers the user's question. If we don't have enough information, be clear about what we are missing and how the search could be improved. End by saying whether we will answer or keep looking.
    2. valid_results: List of indices (0-N) for useful results
    3. invalid_results: List of indices (0-N) for irrelevant results
    4. decision: Either "retry" if we need more info or "finalize" if we can answer the question
+
+   CRITICAL REQUIREMENT: You MUST categorize EVERY single result. The total number of indices in valid_results + invalid_results MUST equal the total number of search results provided. Do not skip any results - every result must be assigned to either valid_results or invalid_results.
 
    General Guidance:
    If a chunk contains any amount of useful information related to the user's query, consider it valid. Only discard chunks that will not help constructing the final answer.
@@ -149,6 +151,7 @@ SEARCH_REVIEW_PROMPT = """Review these search results and determine which contai
    - If current results feel like "more of the same" from previous attempts, be stricter about marking them invalid
    - Remember: we already found good content in previous attempts, so subsequent results need to add significant value
    - Don't mark everything as valid just because it's topically related - we need NEW insights or different angles
+   - BUT STILL CATEGORIZE EVERY RESULT - if a result is redundant, put its index in invalid_results, don't ignore it
 
    For Specific Questions:
    If the user asks a very specific question, such as for an FTE count, only consider chunks that contain information that is specifically related to that question. Discard other chunks.

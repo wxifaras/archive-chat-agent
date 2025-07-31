@@ -282,7 +282,7 @@ class AzureAISearchService:
             reranker_score = result.get("@search.reranker_score", 0.0)
             
             # Apply reranker threshold filter if specified
-            if reranker_threshold >= reranker_threshold:
+            if reranker_score >= reranker_threshold:
 
                 encoded_sas_url = ''
                 if result["blob_path"]:
