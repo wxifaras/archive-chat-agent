@@ -11,7 +11,7 @@ from services.azure_storage_service import AzureStorageService
 from core.settings import settings
 from models.email_item import EmailList
 from services.azure_openai_service import AzureOpenAIService
-from models.content_conversation import ContentConversation, ConversationResult, ReviewDecision, SearchPromptResponse
+from models.content_conversation import ContentConversation, ConversationResult, ReviewDecision, SearchPromptResponse, NUM_SEARCH_RESULTS
 from models.chat_history import ChatMessage, Role
 from services.in_memory_chat_history_manager import InMemoryChatHistoryManager
 from langchain_experimental.text_splitter import SemanticChunker
@@ -337,7 +337,7 @@ class ContentService:
                 context_parts.append(f"<Attempt {i}>\n")
                 context_parts.append(f"   search_query: {search['query']}\n")
                 context_parts.append(f"   review: {review}\n")
-        
+
         context = "\n".join(context_parts)
         
         messages = [
@@ -370,7 +370,8 @@ class ContentService:
             results = await azure_search_service.run_search(
                 search_query=query,
                 processed_ids=conversation.processed_ids,
-                provenance_filter=filter_str if filter_str else None
+                provenance_filter=filter_str if filter_str else None,
+                reranker_threshold=settings.RERANKER_SCORE_THRESHOLD
             )
 
             conversation.current_results = results
@@ -415,22 +416,32 @@ class ContentService:
             # Format search history for context
             search_history_formatted = self.format_search_history_for_review(conversation)
             
-            # Construct the review prompt with all context
-            llm_input = f"""
-                User Question: {conversation.user_query}
+            current_results_count = len(conversation.current_results)
 
-                <Current Search Results to review>
-                {current_results_formatted}
-                <end current search results to review>
+            # Create context about the current search attempt
+            attempt_context = f"\n\nCURRENT SEARCH: Attempt #{conversation.attempts + 1} of {MAX_ATTEMPTS}. Previous attempts found {len(conversation.vetted_results)} valid results."
+            
+            # Create a clear counting instruction
+            counting_instruction = f"""
+                CRITICAL COUNTING REQUIREMENT:
+                - You are reviewing exactly {current_results_count} search results
+                - Results are numbered from #0 to #{current_results_count-1}
+                - You MUST classify every single result number
+                - Your valid_results + invalid_results lists must contain exactly {current_results_count} numbers total
+                - Do not skip any numbers from 0 to {current_results_count-1}"""
+            
+            llm_input = f"""User Question: {conversation.user_query}
+                        {counting_instruction}{attempt_context}
 
-                <previously vetted results, do not review>
-                {vetted_results_formatted}
-                <end previously vetted results, do not review>
+                        Current Search Results:
+                        {current_results_formatted}
 
-                <Previous Attempts>
-                {search_history_formatted}
-                <end Previous Attempts>
-                """
+                        Previously Vetted Results:
+                        {vetted_results_formatted}
+
+                        Previous Attempts:
+                        {search_history_formatted}
+                        """
             
             messages = [
                 {"role": "system", "content": SEARCH_REVIEW_PROMPT},
@@ -440,6 +451,29 @@ class ContentService:
             # Get review decision from Azure OpenAI
             review_decision = await azure_openai_service.get_chat_response(messages, ReviewDecision)
 
+            # Smart retry logic - continue if we're finding lots of valid content (suggests more exists)
+            final_decision = review_decision.decision
+            valid_percentage = len(review_decision.valid_results) / current_results_count if current_results_count > 0 else 0
+            
+            # More intelligent retry conditions
+            should_override_finalize = False
+            override_reason = ""
+            
+            if final_decision == "finalize" and conversation.attempts < (MAX_ATTEMPTS - 1):
+                # Only override if we have strong signals that more content exists
+                if valid_percentage >= 0.8:
+                    should_override_finalize = True
+                    override_reason = f"High validity rate ({valid_percentage:.1%}) suggests more relevant content available"
+                elif valid_percentage >= 0.6:
+                    should_override_finalize = True
+                    override_reason = f"Good validity ({valid_percentage:.1%}) with {len(review_decision.valid_results)} valid results suggests comprehensive search needed"
+            
+            if should_override_finalize:
+                logger.info(f"Overriding 'finalize' decision: {override_reason}")
+                final_decision = "retry"
+            
+            logger.info(f"Pass {conversation.attempts + 1}: {len(review_decision.valid_results)}/{current_results_count} valid ({valid_percentage:.1%}), LLM decision: {review_decision.decision}, final: {final_decision}")
+
             conversation.thought_process.append({
                 "step": "review",
                 "details": {
@@ -448,45 +482,31 @@ class ContentService:
                         {
                             "chunk_id": conversation.current_results[idx]["chunk_id"],
                         }
-                        for idx in review_decision.valid_results
+                        for idx in review_decision.valid_results  # Use filtered indices to prevent IndexError
                     ],
                     "invalid_results": [ 
                         {
                             "chunk_id": conversation.current_results[idx]["chunk_id"]
                         }
-                        for idx in review_decision.invalid_results
+                        for idx in review_decision.valid_results  # Use filtered indices to prevent IndexError
                     ],
-                    "decision": review_decision.decision
+                    "llm_decision": review_decision.decision,
+                    "final_decision": final_decision,
+                    "decision_override": final_decision != review_decision.decision
                 }
             })
 
-            # Validate indices before using them as sometimes Azure OpenAI can return indices like [0,1,2,3,4] when you only have 2 results, causing an index error
-            current_results_count = len(conversation.current_results)
-            
-            # Filter out invalid indices to prevent IndexError
-            valid_indices = [idx for idx in review_decision.valid_results if 0 <= idx < current_results_count]
-            invalid_indices = [idx for idx in review_decision.invalid_results if 0 <= idx < current_results_count]
-            
-            # Log warnings if Azure OpenAI returned invalid indices
-            if len(valid_indices) != len(review_decision.valid_results):
-                invalid_valid_indices = [idx for idx in review_decision.valid_results if idx not in valid_indices]
-                logger.warning(f"Azure OpenAI returned invalid valid_results indices: {invalid_valid_indices}. Current results count: {current_results_count}")
-            
-            if len(invalid_indices) != len(review_decision.invalid_results):
-                invalid_invalid_indices = [idx for idx in review_decision.invalid_results if idx not in invalid_indices]
-                logger.warning(f"Azure OpenAI returned invalid invalid_results indices: {invalid_invalid_indices}. Current results count: {current_results_count}")
-
             conversation.reviews.append(review_decision.thought_process)
-            conversation.decisions.append(review_decision.decision)
+            conversation.decisions.append(final_decision)
 
             # add all valid results from this review to the vetted results list of the overall conversation
-            for idx in review_decision.valid_results:
+            for idx in review_decision.valid_results:  # Use filtered indices to prevent IndexError
                 result = conversation.current_results[idx]
                 conversation.vetted_results.append(result)
                 conversation.processed_ids.add(result["chunk_id"])
             
             # add all invalid results from this review to the discarded results list of the overall conversation
-            for idx in review_decision.invalid_results:
+            for idx in review_decision.valid_results:  # Use filtered indices to prevent IndexError
                 result = conversation.current_results[idx]
                 conversation.discarded_results.append(result)
                 conversation.processed_ids.add(result["chunk_id"])
@@ -523,6 +543,7 @@ class ContentService:
                 ])
             
             output_parts.extend(result_section)
+            output_parts.append("-" * 80)  # Separator between results
         
         return "\n".join(output_parts)
 

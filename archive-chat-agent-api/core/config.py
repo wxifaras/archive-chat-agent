@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     AZURE_AI_SEARCH_SERVICE_KEY: str
     AZURE_AI_SEARCH_INDEX_NAME: str
     NUM_SEARCH_RESULTS: int = Field(default=5)
+    RERANKER_SCORE_THRESHOLD: float = Field(default=1.0, ge=0.0, le=4.0, description="Minimum reranker score threshold for Azure AI Search (0.0-4.0)")
     COSMOS_DATABASE_NAME: str
     COSMOS_CONTAINER_NAME: str
     COSMOS_ENDPOINT: str

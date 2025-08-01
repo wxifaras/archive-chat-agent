@@ -245,6 +245,7 @@ class AzureAISearchService:
             search_query: str,
             processed_ids: Set[str],
             provenance_filter: str | None = None,
+            reranker_threshold: float | None = None,
         ) -> List[SearchResult]:
         """
         Perform a search using Azure Cognitive Search with both semantic and vector queries.
@@ -270,7 +271,7 @@ class AzureAISearchService:
             search_text=search_query,
             vector_queries=[vector_query],
             filter=filter_str,
-            select=["chunk_id", "chunk_content", "file_name", "Provenance", "crawledLink", "blob_path"],
+            select=["chunk_id", "chunk_content", "file_name", "Provenance", "crawledLink", "blob_path", "page_number"],
             top=settings.NUM_SEARCH_RESULTS,
             query_type="semantic",
             semantic_configuration_name="semantic-config"
@@ -278,22 +279,27 @@ class AzureAISearchService:
 
         search_results = []
         async for result in results:
+            reranker_score = result.get("@search.reranker_score", 0.0)
+            
+            # Apply reranker threshold filter if specified
+            if reranker_score >= reranker_threshold:
 
-            encoded_sas_url = ''
-            if result["blob_path"]:
-                sas_url = self.azure_storage_service.generate_blob_sas_url(result["blob_path"])
-                encoded_sas_url = self.azure_storage_service.encode_sas_url(sas_url)
+                encoded_sas_url = ''
+                if result["blob_path"]:
+                    sas_url = self.azure_storage_service.generate_blob_sas_url(result["blob_path"])
+                    encoded_sas_url = self.azure_storage_service.encode_sas_url(sas_url)
 
-            search_result: SearchResult = {
-                "chunk_id": result["chunk_id"],
-                "chunk_content": result["chunk_content"],
-                "reranker_score": result["@search.reranker_score"],
-                "file_name": result.get("file_name", ""),
-                "sas_url": encoded_sas_url,
-                "provenance": result.get("Provenance", ""),
-                "crawledLink": result.get("crawledLink", "")
-            }
+                search_result: SearchResult = {
+                    "chunk_id": result["chunk_id"],
+                    "chunk_content": result["chunk_content"],
+                    "reranker_score": result["@search.reranker_score"],
+                    "file_name": result.get("file_name", ""),
+                    "sas_url": encoded_sas_url,
+                    "source_pages": len(result.get("page_number", [])) if result.get("page_number") else 0,
+                    "provenance": result.get("Provenance", ""),
+                    "crawledLink": result.get("crawledLink", "")
+                }
 
-            search_results.append(search_result)
+                search_results.append(search_result)
 
         return search_results

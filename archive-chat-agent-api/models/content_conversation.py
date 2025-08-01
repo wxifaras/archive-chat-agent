@@ -1,8 +1,15 @@
 from dataclasses import dataclass, field
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Union
 from typing import Literal
 from services.azure_ai_search_service import SearchResult
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from core.settings import settings
+
+# Configuration for search results from environment
+NUM_SEARCH_RESULTS = settings.NUM_SEARCH_RESULTS
+
+# Type alias for search result indices
+SearchResultIndex = int
 
 class SearchPromptResponse(BaseModel):
     search_query: str
@@ -63,14 +70,12 @@ class ConversationResult:
     attempts: int
     search_queries: List[str]
 
-NUM_SEARCH_RESULTS = 5
-
-# Create a type for indices from 0 to NUM_SEARCH_RESULTS-1
-SearchResultIndex = Literal[0, 1, 2, 3, 4]
-
 class ReviewDecision(BaseModel):
     """Schema for review agent decisions"""
     thought_process: str
-    valid_results: List[SearchResultIndex]  # Indices of valid results
-    invalid_results: List[SearchResultIndex]  # Indices of invalid results
+    valid_results: List[int]  # Indices of valid results - will be filtered in service layer
+    invalid_results: List[int]  # Indices of invalid results - will be filtered in service layer  
     decision: Literal["retry", "finalize"]
+    
+    # No field validator - we'll handle invalid indices gracefully in the service layer
+    # This prevents ValidationError from crashing the workflow when LLM hallucinates indices
