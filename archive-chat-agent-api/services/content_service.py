@@ -419,7 +419,7 @@ class ContentService:
             current_results_count = len(conversation.current_results)
 
             # Create context about the current search attempt
-            attempt_context = f"\n\nCURRENT SEARCH: Attempt #{conversation.attempts + 1} of {MAX_ATTEMPTS}. Previous attempts found {len(conversation.vetted_results)} valid results."
+            attempt_context = f"\n\nCURRENT SEARCH: Attempt #{conversation.attempts} of {MAX_ATTEMPTS}. Previous attempts found {len(conversation.vetted_results)} valid results."
             
             # Create a clear counting instruction
             counting_instruction = f"""
@@ -459,7 +459,7 @@ class ContentService:
             should_override_finalize = False
             override_reason = ""
             
-            if final_decision == "finalize" and conversation.attempts < (MAX_ATTEMPTS - 1):
+            if final_decision == "finalize" and conversation.attempts < MAX_ATTEMPTS:
                 # Only override if we have strong signals that more content exists
                 if valid_percentage >= 0.8:
                     should_override_finalize = True
@@ -472,7 +472,7 @@ class ContentService:
                 logger.info(f"Overriding 'finalize' decision: {override_reason}")
                 final_decision = "retry"
             
-            logger.info(f"Pass {conversation.attempts + 1}: {len(review_decision.valid_results)}/{current_results_count} valid ({valid_percentage:.1%}), LLM decision: {review_decision.decision}, final: {final_decision}")
+            logger.info(f"Pass {conversation.attempts}: {len(review_decision.valid_results)}/{current_results_count} valid ({valid_percentage:.1%}), LLM decision: {review_decision.decision}, final: {final_decision}")
 
             conversation.thought_process.append({
                 "step": "review",
