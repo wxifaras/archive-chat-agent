@@ -451,14 +451,9 @@ class ContentService:
             # Get review decision from Azure OpenAI
             review_decision = await azure_openai_service.get_chat_response(messages, ReviewDecision)
 
-            # Validate indices against actual results count and filter invalid ones
-            valid_indices, invalid_indices = self.validate_and_filter_indices(
-                review_decision, current_results_count
-            )
-
             # Smart retry logic - continue if we're finding lots of valid content (suggests more exists)
             final_decision = review_decision.decision
-            valid_percentage = len(valid_indices) / current_results_count if current_results_count > 0 else 0
+            valid_percentage = len(review_decision.valid_results) / current_results_count if current_results_count > 0 else 0
             
             # More intelligent retry conditions
             should_override_finalize = False
@@ -471,13 +466,13 @@ class ContentService:
                     override_reason = f"High validity rate ({valid_percentage:.1%}) suggests more relevant content available"
                 elif valid_percentage >= 0.6:
                     should_override_finalize = True
-                    override_reason = f"Good validity ({valid_percentage:.1%}) with {len(valid_indices)} valid results suggests comprehensive search needed"
+                    override_reason = f"Good validity ({valid_percentage:.1%}) with {len(review_decision.valid_results)} valid results suggests comprehensive search needed"
             
             if should_override_finalize:
                 logger.info(f"Overriding 'finalize' decision: {override_reason}")
                 final_decision = "retry"
             
-            logger.info(f"Pass {conversation.attempts + 1}: {len(valid_indices)}/{current_results_count} valid ({valid_percentage:.1%}), LLM decision: {review_decision.decision}, final: {final_decision}")
+            logger.info(f"Pass {conversation.attempts + 1}: {len(review_decision.valid_results)}/{current_results_count} valid ({valid_percentage:.1%}), LLM decision: {review_decision.decision}, final: {final_decision}")
 
             conversation.thought_process.append({
                 "step": "review",
@@ -487,13 +482,13 @@ class ContentService:
                         {
                             "chunk_id": conversation.current_results[idx]["chunk_id"],
                         }
-                        for idx in valid_indices  # Use filtered indices to prevent IndexError
+                        for idx in review_decision.valid_results  # Use filtered indices to prevent IndexError
                     ],
                     "invalid_results": [ 
                         {
                             "chunk_id": conversation.current_results[idx]["chunk_id"]
                         }
-                        for idx in invalid_indices  # Use filtered indices to prevent IndexError
+                        for idx in review_decision.valid_results  # Use filtered indices to prevent IndexError
                     ],
                     "llm_decision": review_decision.decision,
                     "final_decision": final_decision,
@@ -505,13 +500,13 @@ class ContentService:
             conversation.decisions.append(final_decision)
 
             # add all valid results from this review to the vetted results list of the overall conversation
-            for idx in valid_indices:  # Use filtered indices to prevent IndexError
+            for idx in review_decision.valid_results:  # Use filtered indices to prevent IndexError
                 result = conversation.current_results[idx]
                 conversation.vetted_results.append(result)
                 conversation.processed_ids.add(result["chunk_id"])
             
             # add all invalid results from this review to the discarded results list of the overall conversation
-            for idx in invalid_indices:  # Use filtered indices to prevent IndexError
+            for idx in review_decision.valid_results:  # Use filtered indices to prevent IndexError
                 result = conversation.current_results[idx]
                 conversation.discarded_results.append(result)
                 conversation.processed_ids.add(result["chunk_id"])
@@ -521,52 +516,6 @@ class ContentService:
             
         except Exception as e:
             logger.error(f"Search results review failed: {str(e)}")
-
-    def validate_and_filter_indices(self, review_decision: ReviewDecision, actual_results_count: int) -> tuple[List[int], List[int]]:
-        """
-        Filter indices to only include those that are valid and within range.
-        Handles both LLM hallucinations (indices > NUM_SEARCH_RESULTS) and 
-        cases where actual results < NUM_SEARCH_RESULTS.
-        """
-        # Filter valid_results indices
-        valid_indices = []
-        hallucinated_valid = []
-        out_of_range_valid = []
-        
-        for idx in review_decision.valid_results:
-            if idx < 0 or idx >= NUM_SEARCH_RESULTS:
-                hallucinated_valid.append(idx)
-            elif idx >= actual_results_count:
-                out_of_range_valid.append(idx)
-            else:
-                valid_indices.append(idx)
-        
-        # Filter invalid_results indices  
-        invalid_indices = []
-        hallucinated_invalid = []
-        out_of_range_invalid = []
-        
-        for idx in review_decision.invalid_results:
-            if idx < 0 or idx >= NUM_SEARCH_RESULTS:
-                hallucinated_invalid.append(idx)
-            elif idx >= actual_results_count:
-                out_of_range_invalid.append(idx)
-            else:
-                invalid_indices.append(idx)
-        
-        # Log different types of issues
-        if hallucinated_valid:
-            logger.warning(f"LLM hallucinated valid_results indices: {hallucinated_valid} (outside range [0, {NUM_SEARCH_RESULTS-1}])")
-        if hallucinated_invalid:
-            logger.warning(f"LLM hallucinated invalid_results indices: {hallucinated_invalid} (outside range [0, {NUM_SEARCH_RESULTS-1}])")
-            
-        if out_of_range_valid:
-            logger.info(f"Valid indices beyond actual results (ignored): {out_of_range_valid}. Actual results: {actual_results_count}")
-        if out_of_range_invalid:
-            logger.info(f"Invalid indices beyond actual results (ignored): {out_of_range_invalid}. Actual results: {actual_results_count}")
-        
-        logger.info(f"Filtered indices - Valid: {valid_indices}, Invalid: {invalid_indices}")
-        return valid_indices, invalid_indices
 
     def format_search_results_for_review(self, results: List[SearchResult]) -> str:
         """Format search results for the review prompt with clear structure"""
