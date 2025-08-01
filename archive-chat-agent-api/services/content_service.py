@@ -154,6 +154,7 @@ class ContentService:
                         attachmentChunks = self.chunk_semantic_text(allExtractedContent.content)
                     else:
                         attachmentChunks = self.chunk_text(allExtractedContent)
+                        
                     logger.info(f"Indexing attachment {attachment_file['file_name']} with {len(attachmentChunks)} chunks")
 
                     await azure_search_service.index_content(
