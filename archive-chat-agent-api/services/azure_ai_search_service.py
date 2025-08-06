@@ -200,6 +200,9 @@ class AzureAISearchService:
         except Exception as e:
             logger.error(f"Error in agentic retrieval: {e}")
             raise
+    
+    def delete_agent(self):
+        self.search_index_client.delete_agent("retrieval-agent")
 
     async def create_index(self) -> str:
         try:

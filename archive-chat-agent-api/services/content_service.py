@@ -344,6 +344,9 @@ class ContentService:
             else:
                 await self.review_search_results(conversation)
 
+        # delete the agent
+        azure_search_service.delete_agent()
+
         # Generate final answer by synthesizing vetted results
         final_answer = await self.generate_final_answer(conversation)
 
