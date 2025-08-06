@@ -344,7 +344,8 @@ class ContentService:
             else:
                 await self.review_search_results(conversation)
 
-        # delete the agent
+        # delete the agent - this will delete and create one for each session which is not ideal - this should delete one when the session ends or something equivalent to that.
+        azure_search_service.agentic_setup_complete = False
         azure_search_service.delete_agent()
 
         # Generate final answer by synthesizing vetted results
