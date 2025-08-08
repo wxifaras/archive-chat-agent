@@ -5,11 +5,21 @@ Evaluation runner service that handles background evaluation tasks with proper i
 import asyncio
 import logging
 import uuid
+import os
 from typing import Callable, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
 
-from models.evaluation_progress import EvaluationProgress, QuestionProgress, QuestionStatus
+from models.evaluation_progress import (
+    EvaluationProgress, 
+    QuestionProgress, 
+    QuestionStatus,
+    ConversationEvaluationProgress,
+    ConversationProgress,
+    ConversationStatus,
+    ConversationTurnProgress
+)
+from models.conversation_evaluation import EvaluationMode
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +30,7 @@ class EvaluationRunner:
     def __init__(self):
         self.active_tasks: Dict[str, asyncio.Task] = {}
         self.task_progress: Dict[str, EvaluationProgress] = {}
+        self.conversation_progress: Dict[str, ConversationEvaluationProgress] = {}
     
     async def run_golden_dataset_evaluation(self, golden_dataset_path: Path) -> str:
         """
@@ -275,6 +286,168 @@ class EvaluationRunner:
             logger.error(f"CSV evaluation task {task_id} failed: {str(e)}", exc_info=True)
             raise
     
+    async def run_conversation_evaluation(
+        self, 
+        csv_path: Path, 
+        evaluation_mode: str = "contextual",
+        max_concurrent_conversations: int = 3
+    ) -> str:
+        """Run conversation evaluation in an isolated task."""
+        task_id = str(uuid.uuid4())
+        
+        task = asyncio.create_task(
+            self._run_conversation_evaluation_isolated(
+                csv_path, 
+                evaluation_mode, 
+                max_concurrent_conversations, 
+                task_id
+            )
+        )
+        
+        self.active_tasks[task_id] = task
+        task.add_done_callback(lambda t: self._cleanup_task(task_id, t))
+        
+        return task_id
+    
+    async def _run_conversation_evaluation_isolated(
+        self, 
+        csv_path: Path, 
+        evaluation_mode: str,
+        max_concurrent: int,
+        task_id: str
+    ):
+        """Run conversation evaluation in an isolated context."""
+        try:
+            logger.info(f"Starting conversation evaluation task {task_id}")
+            
+            # Import and create fresh service instances
+            from .llm_validation_service import LLMValidationService
+            from utils.conversation_csv_parser import ConversationCSVParser
+            from models.conversation_evaluation import EvaluationMode
+            
+            # Parse conversations first to get count
+            conversations = ConversationCSVParser.parse_csv_file(csv_path)
+            
+            # Initialize progress tracking
+            progress = ConversationEvaluationProgress(
+                task_id=task_id,
+                total_conversations=len(conversations),
+                evaluation_mode=evaluation_mode
+            )
+            
+            # Create conversation progress entries
+            for conv_id, turns in conversations.items():
+                conv_progress = ConversationProgress(
+                    conversation_id=conv_id,
+                    total_turns=len([t for t in turns if t.role == "user" and t.expected_response])
+                )
+                # Add turn progress entries
+                for turn in turns:
+                    if turn.role == "user" and turn.expected_response:
+                        conv_progress.turn_progress[turn.turn_number] = ConversationTurnProgress(
+                            turn_number=turn.turn_number,
+                            message=turn.message[:50] + "..." if len(turn.message) > 50 else turn.message
+                        )
+                progress.conversations[conv_id] = conv_progress
+            
+            self.conversation_progress[task_id] = progress
+            
+            # Create validation service
+            validation_service = LLMValidationService()
+            
+            # Override the conversation callback to update progress
+            original_validate = validation_service.validate_conversation
+            
+            async def validate_with_progress(*args, **kwargs):
+                # Hook into the validation process to update progress
+                # This is a bit hacky but preserves the isolation pattern
+                results = []
+                
+                # Process each conversation
+                for conv_id in conversations:
+                    if task_id in self.conversation_progress:
+                        conv_prog = self.conversation_progress[task_id].conversations.get(conv_id)
+                        if conv_prog:
+                            conv_prog.start()
+                            logger.info(f"Task {task_id}: Starting conversation {conv_id}")
+                
+                # Run the actual validation
+                results = await original_validate(
+                    str(csv_path),
+                    EvaluationMode(evaluation_mode),
+                    max_concurrent=1  # Process conversations sequentially
+                )
+                
+                # Update progress for completed conversations
+                for result in results:
+                    if task_id in self.conversation_progress:
+                        conv_prog = self.conversation_progress[task_id].conversations.get(result.conversation_id)
+                        if conv_prog:
+                            if result.overall_rating > 0:
+                                conv_prog.complete()
+                            else:
+                                conv_prog.fail("Evaluation failed")
+                            conv_prog.completed_turns = len(result.turn_evaluations)
+                
+                return results
+            
+            # Run validation
+            results = await validate_with_progress()
+            
+            # Update task completion
+            if task_id in self.conversation_progress:
+                self.conversation_progress[task_id].completed_at = datetime.now()
+                if results:
+                    # Find the most recent conversation validation file
+                    import glob
+                    result_files = glob.glob("tests/validation_results/conversation_validation_*.json")
+                    if result_files:
+                        # Get the most recently created file
+                        latest_file = max(result_files, key=os.path.getmtime)
+                        self.conversation_progress[task_id].results_file = latest_file
+                    else:
+                        self.conversation_progress[task_id].results_file = None
+            
+            logger.info(f"Conversation evaluation task {task_id} completed successfully")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Conversation evaluation task {task_id} failed: {str(e)}", exc_info=True)
+            if task_id in self.conversation_progress:
+                # Mark all pending conversations as failed
+                for conv_prog in self.conversation_progress[task_id].conversations.values():
+                    if conv_prog.status == ConversationStatus.PENDING:
+                        conv_prog.fail(str(e))
+            raise
+    
+    def get_conversation_task_progress(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get detailed progress for a conversation evaluation task."""
+        if task_id in self.conversation_progress:
+            return self.conversation_progress[task_id].get_status_summary()
+        return None
+    
+    def _update_conversation_turn_progress(
+        self, 
+        task_id: str, 
+        conversation_id: str, 
+        turn_number: int, 
+        status: str
+    ):
+        """Update progress for a specific conversation turn."""
+        if task_id in self.conversation_progress:
+            conv_prog = self.conversation_progress[task_id].conversations.get(conversation_id)
+            if conv_prog and turn_number in conv_prog.turn_progress:
+                turn_prog = conv_prog.turn_progress[turn_number]
+                if status == "generating":
+                    turn_prog.status = QuestionStatus.GENERATING_ANSWER
+                    conv_prog.current_turn = turn_number
+                elif status == "evaluating":
+                    turn_prog.status = QuestionStatus.EVALUATING
+                elif status == "completed":
+                    turn_prog.status = QuestionStatus.COMPLETED
+                    conv_prog.completed_turns += 1
+                elif status == "failed":
+                    turn_prog.status = QuestionStatus.FAILED
 
 
 # Global instance for the application

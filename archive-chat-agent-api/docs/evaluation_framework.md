@@ -14,24 +14,28 @@ The Archive Chat Agent includes a comprehensive evaluation framework designed to
    - Implements parallel processing for efficient batch evaluation
    - Generates structured evaluation responses with ratings and reasoning
    - Automatically handles model-specific temperature requirements (e.g., o3 models require temperature=1.0)
+   - **NEW**: Supports multi-turn conversation evaluation with context awareness
 
 2. **Evaluation Runner** (`services/evaluation_runner.py`)
    - Orchestrates background evaluation tasks
    - Manages task isolation and progress tracking
    - Integrates with the RAG pipeline to generate answers
    - Handles error recovery and task completion
+   - **NEW**: Supports conversation-level progress tracking with turn-by-turn visibility
 
 3. **API Endpoints** (`routes/evaluation.py`)
    - RESTful endpoints for triggering evaluations
    - Support for CSV input format
    - Real-time progress monitoring capabilities
    - Task-based asynchronous processing
+   - **NEW**: Dedicated endpoints for multi-turn conversation evaluation
 
 4. **Progress Tracking** (`models/evaluation.py`, `models/evaluation_progress.py`)
    - Detailed question-level status tracking
    - Set-based organization for grouped questions
    - Real-time progress updates during evaluation
    - Comprehensive completion statistics
+   - **NEW**: Conversation-level progress with turn-by-turn status tracking
 
 ## API Endpoints
 
@@ -128,10 +132,94 @@ Retrieves the status of a specific evaluation task.
 
 These endpoints accept file uploads for evaluation.
 
-## The run_golden_dataset_evaluation.py Script
+### 6. Conversation Evaluation (NEW)
+**Endpoint:** `POST /api/evaluate/conversation/evaluate`
 
-### Purpose
-This script provides a command-line interface for running golden dataset evaluations against the Archive Chat Agent API. It automates the process of triggering evaluations and monitoring their progress until completion.
+Evaluates multi-turn conversations with context awareness.
+
+**Request Body:**
+```json
+{
+  "csv_file_path": "tests/data/golden_dataset_conversations.csv",
+  "evaluation_mode": "contextual",
+  "max_concurrent_conversations": 3
+}
+```
+
+**CSV Format for Conversations:**
+```csv
+conversation_id,turn_number,role,message,expected_response
+Set_1,1,user,"What database does the system use?","PostgreSQL"
+Set_1,2,user,"What version?","Version 15"
+```
+
+**Response:**
+```json
+{
+  "status": "started",
+  "message": "Conversation evaluation started in background",
+  "task_id": "b9393c46-9af7-41a6-9bc4-0aaddf0377fb",
+  "file_path": "tests/data/golden_dataset_conversations.csv"
+}
+```
+
+### 7. Conversation Upload
+**Endpoint:** `POST /api/evaluate/conversation/upload`
+
+Upload and evaluate conversation CSV files.
+
+### 8. Conversation Status
+**Endpoint:** `GET /api/evaluate/conversation/status/{task_id}`
+
+Get detailed conversation evaluation progress.
+
+**Response:**
+```json
+{
+  "task_id": "b9393c46-9af7-41a6-9bc4-0aaddf0377fb",
+  "evaluation_type": "conversation",
+  "evaluation_mode": "contextual",
+  "total_conversations": 6,
+  "completed": 3,
+  "in_progress": 1,
+  "progress_percentage": 50.0,
+  "current_conversations": [
+    {
+      "conversation_id": "Set_4",
+      "status": "in_progress",
+      "progress": "1/2 turns",
+      "current_turn": 2
+    }
+  ]
+}
+```
+
+## Evaluation Scripts
+
+### run_evaluation.py
+
+#### Purpose
+This unified script provides a command-line interface to run both golden dataset and conversation evaluations via the API endpoints.
+
+#### Usage
+```bash
+# Run conversation evaluation (default)
+python run_evaluation.py
+
+# Run golden dataset evaluation
+python run_evaluation.py --type golden
+
+# With custom conversation CSV
+python run_evaluation.py --csv custom.csv --timeout 60
+```
+
+#### Features
+- Unified interface for all evaluation types
+- Command-line arguments for flexibility
+- Progress monitoring with detailed output
+- Clickable file paths in terminal output
+- Automatic environment variable loading from .env
+
 
 ### How It Works
 
@@ -338,7 +426,7 @@ The evaluation framework supports configurable temperature settings:
 
 - **Golden Dataset**: `archive-chat-agent-api/tests/data/golden_dataset_template.csv`
 - **Results Output**: `archive-chat-agent-api/tests/validation_results/`
-- **Evaluation Scripts**: `archive-chat-agent-api/run_golden_dataset_evaluation.py`
+- **Evaluation Script**: `archive-chat-agent-api/run_evaluation.py`
 
 ## Best Practices
 

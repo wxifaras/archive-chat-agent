@@ -8,14 +8,31 @@ import os
 import re
 import asyncio
 import logging
-from typing import Dict, List, Any, Optional
+import uuid
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 import openai
 import csv
+from pathlib import Path
 
 from core.config import settings
 from prompts.evaluation_prompts import CORRECTNESS_PROMPT
+from prompts.conversation_evaluation_prompts import (
+    CONVERSATION_TURN_EVALUATION_PROMPT,
+    CONVERSATION_HOLISTIC_EVALUATION_PROMPT,
+    CONTEXT_DEPENDENT_EVALUATION_PROMPT
+)
+from models.conversation_evaluation import (
+    ConversationTurn,
+    ConversationEvaluationRequest,
+    ConversationEvaluationResult,
+    TurnEvaluation,
+    ConversationMetrics,
+    ConversationRole,
+    EvaluationMode
+)
+from utils.conversation_csv_parser import ConversationCSVParser
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +88,12 @@ class LLMValidationService:
             # Use configurable temperature from settings
             self.temperature = settings.EVALUATION_TEMPERATURE
             logger.info(f"Using configurable temperature={self.temperature} for model {self.deployment_name}")
+        
+        # ContentService will be initialized when needed for conversation evaluations
+        self.content_service = None
+        
+        # Store session mappings for conversations
+        self.conversation_sessions: Dict[str, str] = {}
     
     def _get_restricted_model_temperature(self, model_name: str) -> Optional[float]:
         """Get the required temperature for models with restrictions.
@@ -289,3 +312,273 @@ class LLMValidationService:
             logger.error(f"Error in CSV validation: {str(e)}")
             raise
     
+    def _format_conversation_history(self, history: List[Dict[str, str]]) -> str:
+        """Format conversation history for prompts."""
+        if not history:
+            return "No previous conversation."
+        
+        formatted_turns = []
+        for turn in history:
+            role = turn['role'].capitalize()
+            message = turn['message']
+            formatted_turns.append(f"{role}: {message}")
+        
+        return "\n".join(formatted_turns)
+    
+    async def _evaluate_conversation_turn(
+        self,
+        turn: ConversationTurn,
+        generated_answer: str,
+        conversation_history: List[Dict[str, str]]
+    ) -> TurnEvaluation:
+        """Evaluate a single conversation turn with context."""
+        try:
+            # Format conversation history
+            history_text = self._format_conversation_history(conversation_history)
+            
+            # Format the evaluation prompt
+            prompt = CONVERSATION_TURN_EVALUATION_PROMPT.format(
+                conversation_history=history_text,
+                current_question=turn.message,
+                expected_answer=turn.expected_response or "N/A",
+                generated_answer=generated_answer
+            )
+            
+            # Call evaluation model
+            response = await self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert AI conversation evaluator."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=self.temperature,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse response
+            eval_result = json.loads(response.choices[0].message.content)
+            
+            # Create TurnEvaluation object
+            return TurnEvaluation(
+                turn_number=turn.turn_number,
+                question=turn.message,
+                expected_response=turn.expected_response or "",
+                generated_response=generated_answer,
+                rating=eval_result.get('rating', 1),
+                correctness_assessment=eval_result.get('correctness_assessment', ''),
+                context_usage_assessment=eval_result.get('context_usage_assessment', ''),
+                evaluation_thoughts=eval_result.get('evaluation_thoughts', '')
+            )
+            
+        except Exception as e:
+            logger.error(f"Error evaluating turn {turn.turn_number}: {str(e)}")
+            return TurnEvaluation(
+                turn_number=turn.turn_number,
+                question=turn.message,
+                expected_response=turn.expected_response or "",
+                generated_response=generated_answer,
+                rating=1,
+                correctness_assessment="Error during evaluation",
+                context_usage_assessment="Error during evaluation",
+                evaluation_thoughts=f"Evaluation error: {str(e)}"
+            )
+    
+    async def _evaluate_conversation_overall(
+        self,
+        conversation_id: str,
+        session_id: str,
+        conversation_history: List[Dict[str, str]],
+        turn_evaluations: List[TurnEvaluation]
+    ) -> Tuple[ConversationMetrics, Dict[str, Any]]:
+        """Evaluate the overall conversation quality."""
+        try:
+            # Format full conversation for evaluation
+            full_conversation = self._format_conversation_history(conversation_history)
+            
+            # Create evaluation prompt
+            prompt = CONVERSATION_HOLISTIC_EVALUATION_PROMPT.format(
+                full_conversation=full_conversation
+            )
+            
+            # Call evaluation model
+            response = await self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert AI conversation evaluator."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=self.temperature,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse response
+            eval_result = json.loads(response.choices[0].message.content)
+            
+            # Create ConversationMetrics
+            metrics = ConversationMetrics(
+                context_coherence_score=eval_result.get('context_coherence_score', 0.5),
+                follow_up_accuracy=eval_result.get('follow_up_accuracy', 0.5),
+                information_consistency=eval_result.get('information_consistency', 0.5),
+                conversation_flow_score=eval_result.get('conversation_flow_score', 0.5),
+                overall_effectiveness=eval_result.get('overall_effectiveness', 0.5)
+            )
+            
+            # Extract additional info
+            additional_info = {
+                'overall_rating': eval_result.get('overall_rating', 3),
+                'overall_evaluation_thoughts': eval_result.get('overall_evaluation_thoughts', ''),
+                'strengths': eval_result.get('strengths', []),
+                'weaknesses': eval_result.get('weaknesses', []),
+                'specific_examples': eval_result.get('specific_examples', {})
+            }
+            
+            return metrics, additional_info
+            
+        except Exception as e:
+            logger.error(f"Error in overall conversation evaluation: {str(e)}")
+            # Return default metrics on error
+            default_metrics = ConversationMetrics(
+                context_coherence_score=0.5,
+                follow_up_accuracy=0.5,
+                information_consistency=0.5,
+                conversation_flow_score=0.5,
+                overall_effectiveness=0.5
+            )
+            default_info = {
+                'overall_rating': 3,
+                'overall_evaluation_thoughts': f"Error during evaluation: {str(e)}",
+                'strengths': [],
+                'weaknesses': ['Evaluation error occurred']
+            }
+            return default_metrics, default_info
+    
+    async def validate_conversation(
+        self,
+        conversation_csv_path: str,
+        evaluation_mode: EvaluationMode = EvaluationMode.CONTEXTUAL,
+        max_concurrent: int = 1  # Sequential for conversations to maintain context
+    ) -> List[ConversationEvaluationResult]:
+        """
+        Validate conversations from CSV using the existing RAG pipeline.
+        
+        Args:
+            conversation_csv_path: Path to CSV file with conversations
+            evaluation_mode: How to evaluate (contextual, turn_by_turn, holistic)
+            max_concurrent: Number of concurrent conversations (default 1)
+            
+        Returns:
+            List of conversation evaluation results
+        """
+        try:
+            # Parse conversations from CSV
+            conversations = ConversationCSVParser.parse_csv_file(conversation_csv_path)
+            results = []
+            
+            # Process each conversation
+            for conv_id, turns in conversations.items():
+                logger.info(f"Evaluating conversation {conv_id} with {len(turns)} turns")
+                
+                # Generate unique session_id for this conversation
+                session_id = f"eval_conv_{conv_id}_{uuid.uuid4()}"
+                self.conversation_sessions[conv_id] = session_id
+                
+                user_id = "evaluation_bot"
+                conversation_history = []
+                turn_evaluations = []
+                
+                # Process each turn in the conversation
+                for turn in turns:
+                    if turn.role == ConversationRole.USER and turn.expected_response:
+                        # Generate response using RAG pipeline with same session_id
+                        logger.info(f"Generating response for {conv_id} turn {turn.turn_number}")
+                        
+                        try:
+                            # Initialize ContentService if not already done
+                            if self.content_service is None:
+                                from services.content_service import ContentService
+                                self.content_service = ContentService()
+                            
+                            # Call RAG pipeline - it automatically uses chat history
+                            response = await self.content_service.chat_with_content(
+                                message=turn.message,
+                                user_id=user_id,
+                                session_id=session_id  # Same session = automatic context
+                            )
+                            
+                            generated_answer = response.get('answer', '')
+                            
+                            # Evaluate this turn with context
+                            if evaluation_mode != EvaluationMode.HOLISTIC:
+                                turn_eval = await self._evaluate_conversation_turn(
+                                    turn=turn,
+                                    generated_answer=generated_answer,
+                                    conversation_history=conversation_history
+                                )
+                                turn_evaluations.append(turn_eval)
+                            
+                            # Update conversation history
+                            conversation_history.append({
+                                "role": "user",
+                                "message": turn.message
+                            })
+                            conversation_history.append({
+                                "role": "assistant",
+                                "message": generated_answer
+                            })
+                            
+                        except Exception as e:
+                            logger.error(f"Error processing turn {turn.turn_number} in {conv_id}: {str(e)}")
+                            # Add error turn evaluation
+                            turn_evaluations.append(TurnEvaluation(
+                                turn_number=turn.turn_number,
+                                question=turn.message,
+                                expected_response=turn.expected_response or "",
+                                generated_response=f"Error: {str(e)}",
+                                rating=1,
+                                correctness_assessment="Error generating response",
+                                context_usage_assessment="N/A",
+                                evaluation_thoughts=f"Error: {str(e)}"
+                            ))
+                
+                # Evaluate overall conversation
+                metrics, additional_info = await self._evaluate_conversation_overall(
+                    conversation_id=conv_id,
+                    session_id=session_id,
+                    conversation_history=conversation_history,
+                    turn_evaluations=turn_evaluations
+                )
+                
+                # Create result
+                result = ConversationEvaluationResult(
+                    conversation_id=conv_id,
+                    session_id=session_id,
+                    evaluation_mode=evaluation_mode,
+                    overall_rating=additional_info['overall_rating'],
+                    turn_evaluations=turn_evaluations,
+                    conversation_metrics=metrics,
+                    overall_evaluation_thoughts=additional_info['overall_evaluation_thoughts'],
+                    strengths=additional_info.get('strengths', []),
+                    weaknesses=additional_info.get('weaknesses', [])
+                )
+                
+                results.append(result)
+                logger.info(f"Completed evaluation of conversation {conv_id}")
+            
+            # Save results
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            results_file = Path("tests/validation_results") / f"conversation_validation_{timestamp}.json"
+            results_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Convert results to dict for JSON serialization
+            results_dict = [r.model_dump(mode='json') for r in results]
+            
+            with open(results_file, 'w', encoding='utf-8') as f:
+                json.dump(results_dict, f, indent=4, ensure_ascii=False)
+            
+            logger.info(f"Conversation validation complete. Results written to {results_file}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in conversation validation: {str(e)}")
+            raise

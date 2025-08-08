@@ -19,6 +19,11 @@ from models.evaluation import (
     BatchEvaluationResponse,
     EvaluationStatus
 )
+from models.conversation_evaluation import (
+    ConversationBatchEvaluationRequest,
+    ConversationEvaluationResult,
+    EvaluationMode
+)
 from services.llm_validation_service import LLMValidationService
 from services.evaluation_runner import evaluation_runner
 
@@ -186,4 +191,143 @@ async def evaluate_golden_dataset(background_tasks: BackgroundTasks):
         
     except Exception as e:
         logger.error(f"Error starting golden dataset evaluation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/conversation/evaluate", response_model=EvaluationStatus)
+async def evaluate_conversation(
+    request: ConversationBatchEvaluationRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Evaluate multi-turn conversations from a CSV file.
+    
+    CSV format expected:
+    - conversation_id: Unique identifier for the conversation
+    - turn_number: Sequential turn number (1, 2, 3, ...)
+    - role: Either 'user' or 'assistant'
+    - message: The message content
+    - expected_response: Expected response for user turns (ground truth)
+    
+    The system will:
+    1. Group turns by conversation_id
+    2. Use the same session_id for all turns in a conversation
+    3. Generate responses using the RAG pipeline (maintaining context)
+    4. Evaluate responses considering conversation context
+    """
+    try:
+        # Verify file exists
+        csv_path = Path(request.csv_file_path)
+        if not csv_path.exists():
+            raise HTTPException(status_code=404, detail=f"CSV file not found: {request.csv_file_path}")
+        
+        # Use the evaluation runner to handle the task properly
+        task_id = await evaluation_runner.run_conversation_evaluation(
+            csv_path=csv_path,
+            evaluation_mode=request.evaluation_mode,
+            max_concurrent_conversations=request.max_concurrent_conversations
+        )
+        
+        return EvaluationStatus(
+            status="started",
+            message="Conversation evaluation started in background",
+            task_id=task_id,
+            file_path=str(csv_path)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error starting conversation evaluation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/conversation/upload", response_model=EvaluationStatus)
+async def evaluate_uploaded_conversation(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
+    evaluation_mode: str = "contextual"
+):
+    """
+    Upload and evaluate a CSV file containing multi-turn conversations.
+    
+    Parameters:
+    - file: CSV file with conversation data
+    - evaluation_mode: How to evaluate ('contextual', 'turn_by_turn', 'holistic')
+    """
+    try:
+        # Validate evaluation mode
+        try:
+            mode = EvaluationMode(evaluation_mode)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid evaluation_mode: {evaluation_mode}. Must be one of: contextual, turn_by_turn, holistic"
+            )
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+            shutil.copyfileobj(file.file, tmp_file)
+            tmp_path = tmp_file.name
+        
+        # Create request and process
+        request = ConversationBatchEvaluationRequest(
+            csv_file_path=tmp_path,
+            evaluation_mode=mode
+        )
+        
+        return await evaluate_conversation(request, background_tasks)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing uploaded conversation CSV: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversation/status/{task_id}")
+async def get_conversation_evaluation_status(task_id: str):
+    """
+    Get detailed status for a specific conversation evaluation task.
+    
+    Returns conversation-level progress including:
+    - Total conversations and progress
+    - Current conversations being evaluated
+    - Per-conversation turn progress
+    """
+    progress = evaluation_runner.get_conversation_task_progress(task_id)
+    
+    if not progress:
+        # Fall back to general task progress
+        progress = evaluation_runner.get_task_progress(task_id)
+        if not progress:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    
+    return progress
+
+
+@router.post("/conversation/sample", response_model=Dict[str, str])
+async def create_sample_conversation_csv():
+    """
+    Generate a sample conversation CSV file for testing.
+    
+    Creates a CSV with example multi-turn conversations that demonstrate:
+    - Context retention across turns
+    - Follow-up questions
+    - Clarification requests
+    """
+    try:
+        from utils.conversation_csv_parser import create_sample_conversation_csv
+        
+        # Create sample in tests/data directory
+        sample_path = Path("tests/data/sample_conversations_generated.csv")
+        sample_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        create_sample_conversation_csv(sample_path)
+        
+        return {
+            "message": "Sample conversation CSV created successfully",
+            "file_path": str(sample_path)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating sample conversation CSV: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

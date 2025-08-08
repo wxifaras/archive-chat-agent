@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Script to run golden dataset evaluation against the Archive Chat Agent API.
-This script calls the actual API endpoints to perform real evaluation.
+Unified script to run evaluations against the Archive Chat Agent API.
+Supports both single-question golden dataset and multi-turn conversation evaluations.
 """
 
 import requests
@@ -13,6 +13,7 @@ from datetime import datetime
 import glob
 import csv
 from pathlib import Path
+import argparse
 
 def load_env_file(env_path=".env"):
     """Load environment variables from .env file."""
@@ -87,8 +88,76 @@ def trigger_golden_dataset_evaluation(base_url):
         print(f"✗ Error triggering evaluation: {str(e)}")
         return False, None
 
-def monitor_evaluation_status(base_url, task_id=None, max_wait_minutes=30):
-    """Monitor the evaluation status until completion with detailed progress."""
+def trigger_conversation_evaluation(base_url, csv_path):
+    """Trigger the conversation evaluation via API."""
+    endpoint = f"{base_url}/api/evaluate/conversation/evaluate"
+    
+    print(f"Triggering conversation evaluation at: {endpoint}")
+    
+    try:
+        # First, check the CSV exists and get conversation count
+        try:
+            conversation_count = 0
+            total_turns = 0
+            if os.path.exists(csv_path):
+                with open(csv_path, 'r') as f:
+                    reader = csv.DictReader(f)
+                    conversations = {}
+                    for row in reader:
+                        conv_id = row.get('conversation_id')
+                        if conv_id:
+                            if conv_id not in conversations:
+                                conversations[conv_id] = 0
+                            conversations[conv_id] += 1
+                            total_turns += 1
+                    conversation_count = len(conversations)
+                
+                # Load env vars for config values
+                env_vars = load_env_file()
+                max_concurrent = int(env_vars.get('EVALUATION_MAX_CONCURRENT', '3'))
+                eval_temp = os.environ.get('EVALUATION_TEMPERATURE') or env_vars.get('EVALUATION_TEMPERATURE', '0.0')
+                print(f"\n📊 Dataset contains {conversation_count} conversations with {total_turns} total turns")
+                print(f"   With max_concurrent_conversations={max_concurrent} parallel evaluations")
+                print(f"   Using EVALUATION_TEMPERATURE={eval_temp}")
+        except:
+            pass
+        
+        # Load env vars for config values if not already loaded
+        if 'max_concurrent' not in locals():
+            env_vars = load_env_file()
+            max_concurrent = int(env_vars.get('EVALUATION_MAX_CONCURRENT', '3'))
+        
+        response = requests.post(
+            endpoint,
+            json={
+                "csv_file_path": csv_path,
+                "evaluation_mode": "contextual",
+                "max_concurrent_conversations": max_concurrent
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            task_id = result.get('task_id')
+            print(f"\n✓ Conversation evaluation started successfully")
+            print(f"  Status: {result.get('status')}")
+            print(f"  Task ID: {task_id}")
+            print(f"  Message: {result.get('message')}")
+            print(f"  Output will be saved to: tests/validation_results/conversation_validation_*.json")
+            return True, task_id
+        else:
+            print(f"\n✗ Failed to start evaluation")
+            print(f"  Status code: {response.status_code}")
+            print(f"  Response: {response.text}")
+            return False, None
+            
+    except Exception as e:
+        print(f"✗ Error triggering evaluation: {str(e)}")
+        return False, None
+
+def monitor_golden_evaluation_status(base_url, task_id=None, max_wait_minutes=30):
+    """Monitor the golden dataset evaluation status until completion with detailed progress."""
     # Use task-specific endpoint if task_id is provided
     if task_id:
         endpoint = f"{base_url}/api/evaluate/status/{task_id}"
@@ -226,7 +295,7 @@ def monitor_evaluation_status(base_url, task_id=None, max_wait_minutes=30):
                     
                     # Wait a bit more for files to be written
                     time.sleep(3)
-                    return True
+                    return True, None  # Return None for results_file since we'll find it later
                     
             else:
                 print(f"\n✗ Error checking status: {response.status_code}")
@@ -237,11 +306,118 @@ def monitor_evaluation_status(base_url, task_id=None, max_wait_minutes=30):
         time.sleep(2)  # Check every 2 seconds
     
     print(f"\n✗ Evaluation timed out after {max_wait_minutes} minutes")
-    return False
+    return False, None
 
-def find_latest_results_file():
-    """Find the most recently created validation results file."""
-    result_files = glob.glob("tests/validation_results/validation_results_*.json")
+def monitor_conversation_evaluation_status(base_url, task_id, max_wait_minutes=30):
+    """Monitor the conversation evaluation status until completion with detailed progress."""
+    endpoint = f"{base_url}/api/evaluate/conversation/status/{task_id}"
+    
+    print(f"\nMonitoring conversation evaluation progress...")
+    print(f"Timeout set to {max_wait_minutes} minutes")
+    print(f"{'-'*60}")
+    
+    start_time = time.time()
+    max_wait_seconds = max_wait_minutes * 60
+    last_status_time = start_time
+    status_interval = 10  # Show status every 10 seconds
+    evaluation_started = False
+    
+    while time.time() - start_time < max_wait_seconds:
+        try:
+            response = requests.get(endpoint)
+            
+            if response.status_code == 200:
+                status = response.json()
+                elapsed = int(time.time() - start_time)
+                
+                # Track if evaluation has started
+                if status.get('in_progress', 0) > 0 or status.get('completed', 0) > 0:
+                    evaluation_started = True
+                
+                # Show detailed status every interval
+                if (time.time() - last_status_time) >= status_interval or status.get('is_complete'):
+                    minutes = elapsed // 60
+                    seconds = elapsed % 60
+                    
+                    total_convs = status.get('total_conversations', 0)
+                    completed = status.get('completed', 0)
+                    in_progress = status.get('in_progress', 0)
+                    progress_pct = status.get('progress_percentage', 0)
+                    
+                    print(f"\n  [{minutes:02d}:{seconds:02d}] Conversation Progress: {completed}/{total_convs} ({progress_pct:.1f}% complete)")
+                    print(f"           - Total Conversations: {total_convs}")
+                    print(f"           - Completed: {completed}")
+                    print(f"           - In Progress: {in_progress}")
+                    pending = total_convs - (completed + in_progress)
+                    if pending > 0:
+                        print(f"           - Pending: {pending}")
+                    
+                    # Show current conversations being processed
+                    current_convs = status.get('current_conversations', [])
+                    if current_convs:
+                        print(f"\n           Currently processing:")
+                        for conv in current_convs[:3]:  # Show up to 3
+                            print(f"           • {conv['conversation_id']}: {conv['progress']} ({conv['status']})")
+                    
+                    last_status_time = time.time()
+                
+                # Check if evaluation is complete
+                if status.get('is_complete'):
+                    # Show final summary
+                    print(f"\n{'='*60}")
+                    print(f"EVALUATION SUMMARY")
+                    print(f"{'='*60}")
+                    
+                    print(f"\n✓ All conversations evaluated in {elapsed} seconds!")
+                    print(f"\n  Final Results:")
+                    print(f"  - Total Conversations: {total_convs}")
+                    print(f"  - Conversations Completed: {completed}")
+                    print(f"  - Success Rate: 100.0%")
+                    
+                    if status.get('results_file'):
+                        results_file = status.get('results_file')
+                        # Normalize the path to use forward slashes for display
+                        normalized_path = results_file.replace('\\', '/')
+                        abs_path = os.path.abspath(results_file)
+                        file_url = f"file://{abs_path}"
+                        hyperlink = f"\033]8;;{file_url}\033\\{normalized_path}\033]8;;\033\\"
+                        print(f"\n  Results saved to: {hyperlink}")
+                    
+                    # Show performance metrics
+                    avg_time = elapsed / total_convs if total_convs > 0 else 0
+                    # Load env vars for config values
+                    env_vars = load_env_file()
+                    max_concurrent = env_vars.get('EVALUATION_MAX_CONCURRENT', '3')
+                    print(f"\n  Performance:")
+                    print(f"  - Total Time: {elapsed} seconds")
+                    print(f"  - Average Time per Conversation: {avg_time:.1f} seconds")
+                    print(f"  - Parallel Workers: {max_concurrent}")
+                    
+                    print(f"\n{'='*60}")
+                    
+                    # Wait a bit for files to be written
+                    time.sleep(3)
+                    return True, status.get('results_file')
+                    
+            else:
+                print(f"\n✗ Error checking status: {response.status_code}")
+                
+        except Exception as e:
+            print(f"\n✗ Error monitoring status: {str(e)}")
+        
+        time.sleep(2)  # Check every 2 seconds
+    
+    print(f"\n✗ Evaluation timed out after {max_wait_minutes} minutes")
+    return False, None
+
+def find_latest_results_file(evaluation_type):
+    """Find the most recently created validation results file based on evaluation type."""
+    if evaluation_type == "golden":
+        pattern = "tests/validation_results/validation_results_*.json"
+    else:  # conversation
+        pattern = "tests/validation_results/conversation_validation_*.json"
+    
+    result_files = glob.glob(pattern)
     
     if not result_files:
         return None
@@ -250,8 +426,8 @@ def find_latest_results_file():
     result_files.sort(key=os.path.getmtime, reverse=True)
     return result_files[0]
 
-def display_evaluation_results(results_file):
-    """Display the evaluation results from the JSON file."""
+def display_golden_evaluation_results(results_file):
+    """Display the golden dataset evaluation results from the JSON file."""
     print(f"\n{'='*60}")
     print(f"EVALUATION RESULTS")
     print(f"{'='*60}")
@@ -311,17 +487,129 @@ def display_evaluation_results(results_file):
     except Exception as e:
         print(f"✗ Error reading results file: {str(e)}")
 
+def display_conversation_evaluation_results(results_file):
+    """Display the conversation evaluation results from the JSON file."""
+    print(f"\n{'='*60}")
+    print(f"CONVERSATION EVALUATION RESULTS")
+    print(f"{'='*60}")
+    
+    # Create clickable file path (works in terminals that support OSC 8)
+    # Normalize the path to use forward slashes for display
+    normalized_path = results_file.replace('\\', '/')
+    abs_path = os.path.abspath(results_file)
+    file_url = f"file://{abs_path}"
+    # OSC 8 hyperlink format: \033]8;;URL\033\\TEXT\033]8;;\033\\
+    hyperlink = f"\033]8;;{file_url}\033\\{normalized_path}\033]8;;\033\\"
+    print(f"Results file: {hyperlink}")
+    
+    try:
+        with open(results_file, 'r', encoding='utf-8') as f:
+            results = json.load(f)
+        
+        total_conversations = len(results)
+        total_turns = sum(len(r['turn_evaluations']) for r in results)
+        
+        # Calculate metrics
+        overall_ratings = [r['overall_rating'] for r in results]
+        avg_overall = sum(overall_ratings) / len(overall_ratings) if overall_ratings else 0
+        
+        # Rating distribution
+        ratings_dist = {5: 0, 3: 0, 1: 0}
+        for rating in overall_ratings:
+            ratings_dist[rating] += 1
+        
+        # Display summary
+        print(f"\nRESULTS SUMMARY:")
+        print(f"  Total conversations: {total_conversations}")
+        print(f"  Total turns evaluated: {total_turns}")
+        print(f"\n  Conversation Ratings:")
+        print(f"  ⭐⭐⭐⭐⭐ (5-star): {ratings_dist[5]} ({(ratings_dist[5]/total_conversations*100) if total_conversations > 0 else 0:.1f}%)")
+        print(f"  ⭐⭐⭐ (3-star): {ratings_dist[3]} ({(ratings_dist[3]/total_conversations*100) if total_conversations > 0 else 0:.1f}%)")
+        print(f"  ⭐ (1-star): {ratings_dist[1]} ({(ratings_dist[1]/total_conversations*100) if total_conversations > 0 else 0:.1f}%)")
+        print(f"  Average Rating: {avg_overall:.2f}")
+        
+        # Show conversation details
+        print(f"\n{'='*60}")
+        print(f"CONVERSATION DETAILS")
+        print(f"{'='*60}")
+        
+        for result in results:
+            stars_display = "⭐" * result['overall_rating']
+            print(f"\n{result['conversation_id']}: {stars_display} ({result['overall_rating']} stars)")
+            
+            metrics = result['conversation_metrics']
+            print(f"  Context Coherence: {metrics['context_coherence_score']:.2f}")
+            print(f"  Follow-up Accuracy: {metrics['follow_up_accuracy']:.2f}")
+            print(f"  Information Consistency: {metrics['information_consistency']:.2f}")
+            
+            # Show turn ratings
+            turn_ratings = [t['rating'] for t in result['turn_evaluations']]
+            print(f"  Turn Ratings: {turn_ratings}")
+            
+    except Exception as e:
+        print(f"✗ Error reading results file: {str(e)}")
+
 def main():
-    """Main function to run the golden dataset evaluation."""
-    api_base_url = "http://localhost:8000"
+    """Main function to run the evaluation."""
+    parser = argparse.ArgumentParser(
+        description='Run evaluations against the Archive Chat Agent API',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                                    # Run conversation evaluation (default)
+  %(prog)s --type conversation                # Run conversation evaluation
+  %(prog)s --type golden                      # Run golden dataset evaluation
+  %(prog)s -t conversation --csv custom.csv   # Run conversation evaluation with custom CSV
+        """
+    )
+    
+    parser.add_argument(
+        '--type', '-t',
+        choices=['golden', 'conversation'],
+        default='conversation',
+        help='Type of evaluation to run (default: conversation)'
+    )
+    
+    parser.add_argument(
+        '--csv',
+        type=str,
+        default='tests/data/golden_dataset_conversations.csv',
+        help='CSV file path for conversation evaluation (default: tests/data/golden_dataset_conversations.csv)'
+    )
+    
+    parser.add_argument(
+        '--api-url',
+        type=str,
+        default='http://localhost:8000',
+        help='API base URL (default: http://localhost:8000)'
+    )
+    
+    parser.add_argument(
+        '--timeout',
+        type=int,
+        default=30,
+        help='Maximum wait time in minutes (default: 30)'
+    )
+    
+    args = parser.parse_args()
+    
+    api_base_url = args.api_url
     
     # Load environment variables from .env file
     env_vars = load_env_file()
     
-    print(f"Archive Chat Agent - Golden Dataset Evaluation")
+    # Display header based on evaluation type
+    if args.type == 'golden':
+        print(f"Archive Chat Agent - Golden Dataset Evaluation")
+    else:
+        print(f"Archive Chat Agent - Multi-Turn Conversation Evaluation")
+    
     print(f"{'='*60}")
     print(f"API URL: {api_base_url}")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    if args.type == 'conversation':
+        print(f"CSV File: {args.csv}")
     
     # Display model configuration upfront
     # First try OS environment, then fall back to .env file
@@ -332,6 +620,11 @@ def main():
     print(f"  RAG Pipeline: {rag_model}")
     print(f"  Evaluation: {eval_model} (temperature={eval_temp})")
     print()
+    
+    # Check if CSV file exists for conversation evaluation
+    if args.type == 'conversation' and not Path(args.csv).exists():
+        print(f"✗ CSV file not found: {args.csv}")
+        return 1
     
     # Step 1: Check API health
     print("Step 1: Checking API health...")
@@ -345,8 +638,13 @@ def main():
     print("✓ API is healthy\n")
     
     # Step 2: Trigger evaluation
-    print("Step 2: Triggering golden dataset evaluation...")
-    success, task_id = trigger_golden_dataset_evaluation(api_base_url)
+    if args.type == 'golden':
+        print("Step 2: Triggering golden dataset evaluation...")
+        success, task_id = trigger_golden_dataset_evaluation(api_base_url)
+    else:
+        print("Step 2: Triggering conversation evaluation...")
+        success, task_id = trigger_conversation_evaluation(api_base_url, args.csv)
+    
     if not success:
         return 1
     
@@ -354,26 +652,40 @@ def main():
     print("\nStep 3: Monitoring evaluation progress...")
     
     # Display model information
-    rag_model = os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME') or env_vars.get('AZURE_OPENAI_DEPLOYMENT_NAME', 'Not configured')
-    eval_model = os.environ.get('AZURE_OPENAI_EVALUATION_DEPLOYMENT_NAME') or env_vars.get('AZURE_OPENAI_EVALUATION_DEPLOYMENT_NAME', 'gpt-4.1')
-    eval_temp = os.environ.get('EVALUATION_TEMPERATURE') or env_vars.get('EVALUATION_TEMPERATURE', '0.0')
-    
     print("\n🤖 Model Configuration:")
     print(f"   - RAG Pipeline Model: {rag_model}")
     print(f"   - Evaluation Model: {eval_model} (temperature={eval_temp})")
     
     print("\n💡 Tips while waiting:")
-    print("   - Each question goes through the full RAG pipeline")
-    print(f"   - Answers are generated by {rag_model} then evaluated by {eval_model}")
-    print("   - Check API logs for detailed processing info")
-    print("   - Increase EVALUATION_MAX_CONCURRENT in .env for faster processing")
+    if args.type == 'golden':
+        print("   - Each question goes through the full RAG pipeline")
+        print(f"   - Answers are generated by {rag_model} then evaluated by {eval_model}")
+        print("   - Check API logs for detailed processing info")
+        print("   - Increase EVALUATION_MAX_CONCURRENT in .env for faster processing")
+    else:
+        print("   - Each conversation is evaluated turn by turn")
+        print(f"   - Answers are generated by {rag_model} then evaluated by {eval_model}")
+        print("   - Contextual coherence and follow-up accuracy are assessed")
+        print("   - Check API logs for detailed processing info")
     
-    if not monitor_evaluation_status(api_base_url, task_id=task_id, max_wait_minutes=30):
+    # Monitor with appropriate function
+    if args.type == 'golden':
+        completed, results_file = monitor_golden_evaluation_status(api_base_url, task_id=task_id, max_wait_minutes=args.timeout)
+    else:
+        completed, results_file = monitor_conversation_evaluation_status(api_base_url, task_id, max_wait_minutes=args.timeout)
+    
+    if not completed:
         print("\nThe evaluation may still be running in the background.")
         print("You can check the status manually at:")
-        print(f"  curl {api_base_url}/api/evaluate/status")
+        if args.type == 'golden':
+            print(f"  curl {api_base_url}/api/evaluate/status/{task_id}")
+        else:
+            print(f"  curl {api_base_url}/api/evaluate/conversation/status/{task_id}")
         print("\nTo check the latest results file:")
-        print("  ls -la validation_results_*.json")
+        if args.type == 'golden':
+            print("  ls -la tests/validation_results/validation_results_*.json")
+        else:
+            print("  ls -la tests/validation_results/conversation_validation_*.json")
         return 1
     
     # Step 4: Find and display results
@@ -382,13 +694,21 @@ def main():
     # Wait a moment for file to be written
     time.sleep(2)
     
-    results_file = find_latest_results_file()
+    if not results_file:
+        results_file = find_latest_results_file(args.type)
+    
     if results_file:
         print(f"✓ Found results file: {results_file}")
-        display_evaluation_results(results_file)
+        if args.type == 'golden':
+            display_golden_evaluation_results(results_file)
+        else:
+            display_conversation_evaluation_results(results_file)
     else:
         print("✗ No results file found")
-        print("  Results files should be in: tests/validation_results/validation_results_YYYYMMDD_HHMMSS.json")
+        if args.type == 'golden':
+            print("  Results files should be in: tests/validation_results/validation_results_YYYYMMDD_HHMMSS.json")
+        else:
+            print("  Results files should be in: tests/validation_results/conversation_validation_YYYYMMDD_HHMMSS.json")
     
     print(f"\n{'='*60}")
     print("Evaluation complete!")
